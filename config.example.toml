@@ -1,0 +1,60 @@
+# waybar-ai-quota örnek yapılandırması
+# Kopyalayın:  cp config.example.toml ~/.config/waybar-ai-quota/config.toml
+# Tüm alanlar isteğe bağlıdır; eksik alanlar güvenli varsayılanları kullanır.
+
+[refresh]
+# Aktif oturum (in-flight) varken yerel veri yenileme aralığı (saniye)
+local_active_seconds = 5
+# Boştayken yerel veri yenileme aralığı (saniye)
+local_idle_seconds = 15
+# Uzak API (Antigravity canlı kota, GitHub Copilot) önbellek ömrü (saniye)
+remote_seconds = 600
+# Antigravity cachedQuota önbelleğinin bayat sayılma süresi (saniye)
+antigravity_cache_seconds = 600
+# GitHub Copilot önbellek ömrü (saniye)
+copilot_cache_seconds = 600
+
+[thresholds]
+# Bu yüzdenin altı "kritik" kabul edilir (masaüstü bildirimi + kırmızı sınıf)
+critical_pct = 15
+# Zor işlerde Antigravity Claude'un birincil önerilmesi için gereken minimum yüzde
+antigravity_primary_pct = 20
+# "Yakın zamanda aktif" sayılan oturum penceresi (saniye)
+recent_activity_seconds = 300
+# Çift Antigravity çakışması için güncellik penceresi (saniye)
+conflict_window_seconds = 90
+
+[cloud]
+# Uzak API istekleri için zaman aşımı (saniye)
+timeout_seconds = 10
+# Açıkça false yapılmadıkça canlı yenileme dener
+antigravity_live_refresh = true
+
+[antigravity]
+# Boş bırakılırsa OAuth istemci bilgisi, kurulu opencode-antigravity-auth
+# eklentisinin constants.js dosyasından otomatik okunur.
+# client_id = ""
+# client_secret = ""
+
+[copilot]
+# "gh" komutu yolu (boşsa PATH üzerinden aranır)
+gh_binary = ""
+# Plan etiketi otomatik algılanamazsa kullanılacak etiket
+plan_label_override = ""
+
+[notifications]
+enabled = true
+# Aynı uyarı için iki bildirim arasındaki en kısa süre (saniye)
+cooldown_seconds = 1800
+# notify-send uygulama adı
+app_name = "waybar-ai-quota"
+
+[waybar]
+# Bar metninde gösterilecek maksimum model adı uzunluğu
+max_model_chars = 22
+# Boşta gösterim biçimi: "compact" (AG %X · Go %Y · GH %Z) veya "critical"
+idle_format = "compact"
+
+[ui]
+# GTK4 panel için kullanılacak Python yorumlayıcısı (gi/GTK4 bulunan sistem Python'u)
+gtk_python = "/usr/bin/python3"

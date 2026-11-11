@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv/
+
+# Gizli / yerel veriler (asla commit edilmez)
+.env
+.env.*
+*.pem
+*.key
+*.secret
+credentials.json
+antigravity-accounts.json
+state.json
+*cache*.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Editörler
+.idea/
+*.swp
+*~
+.DS_Store

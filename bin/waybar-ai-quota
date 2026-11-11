@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# waybar-ai-quota — GTK4 + Gtk4LayerShell panelini açar/kapatır.
+#
+# Waybar'da:
+#   "on-click": "waybar-ai-quota"
+#
+# Aynı komut ikinci kez çağrıldığında PID dosyası üzerinden açık paneli
+# SIGTERM ile kapatır (toggle). Panel zaten kapalıysa yeniden açar.
+
+set -euo pipefail
+
+# Sembolik bağ üzerinden (ör. ~/.local/bin/waybar-ai-quota) çağrılsa bile
+# gerçek proje kökünü bul.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    SOURCE_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+    SOURCE="$(readlink -- "$SOURCE")"
+    [[ "$SOURCE" == /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+ROOT_DIR="$(cd -P -- "$SCRIPT_DIR/.." && pwd)"
+UI_FILE="$ROOT_DIR/src/waybar_ai_quota/ui.py"
+
+# `ui` alt komutu doğrudan panel toggle mantığına düşer; kalan argümanlar korunur.
+if [[ "${1:-}" == "ui" ]]; then
+    shift
+fi
+
+# CLI alt komutları (waybar/status/calibrate/--version/--help) Python CLI'ye gider.
+case "${1:-}" in
+    waybar|status|calibrate|--version|-h|--help|help)
+        CLI_PYTHON="$ROOT_DIR/.venv/bin/python"
+        if [[ ! -x "$CLI_PYTHON" ]]; then
+            CLI_PYTHON="$(command -v python3 || true)"
+        fi
+        if [[ -z "$CLI_PYTHON" ]]; then
+            echo "waybar-ai-quota: python3 bulunamadı." >&2
+            exit 1
+        fi
+        export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+        exec "$CLI_PYTHON" -m waybar_ai_quota.cli "$@"
+        ;;
+esac
+
+if [[ -n "${WAYBAR_AI_QUOTA_DATA_DIR:-}" ]]; then
+    PID_FILE="$WAYBAR_AI_QUOTA_DATA_DIR/ui.pid"
+else
+    PID_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/waybar-ai-quota/ui.pid"
+fi
+
+pid_is_alive() {
+    local pid="${1:-}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+# Çalışan paneli kapatır. Kapattıysa 0, zaten kapalıysa 1 döndürür.
+close_panel() {
+    [[ -f "$PID_FILE" ]] || return 1
+    local pid
+    pid="$(tr -d '[:space:]' < "$PID_FILE" 2>/dev/null || true)"
+    if ! pid_is_alive "$pid"; then
+        rm -f "$PID_FILE" 2>/dev/null || true
+        return 1
+    fi
+    kill -TERM "$pid" 2>/dev/null || true
+    # Panelin temiz kapanması için kısa süre bekle.
+    local i
+    for i in $(seq 1 30); do
+        pid_is_alive "$pid" || break
+        sleep 0.05
+    done
+    pid_is_alive "$pid" && kill -KILL "$pid" 2>/dev/null || true
+    rm -f "$PID_FILE" 2>/dev/null || true
+    return 0
+}
+
+case "${1:-}" in
+    --close|-c)
+        close_panel || true
+        exit 0
+        ;;
+    --toggle|-t|"")
+        ;;
+    *)
+        # Bilinmeyen argümanları ui.py'ye bırak.
+        ;;
+esac
+
+# Toggle: açık panel varsa kapat ve çık.
+if close_panel; then
+    exit 0
+fi
+
+if [[ ! -f "$UI_FILE" ]]; then
+    echo "waybar-ai-quota: ui.py bulunamadı: $UI_FILE" >&2
+    exit 1
+fi
+
+if [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
+    echo "waybar-ai-quota: Wayland/X11 görüntüsü bulunamadı." >&2
+    exit 1
+fi
+
+# GTK4/PyGObject bulunan yorumlayıcıyı seç: önce açık override, sonra
+# proje sanal ortamı (gi varsa), en son Fedora'nın sistem Python'u.
+PYTHON_BIN=""
+CANDIDATES=()
+if [[ -n "${WAYBAR_AI_QUOTA_PYTHON:-}" ]]; then
+    CANDIDATES+=("$WAYBAR_AI_QUOTA_PYTHON")
+fi
+if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    CANDIDATES+=("$ROOT_DIR/.venv/bin/python")
+fi
+CANDIDATES+=("/usr/bin/python3")
+
+for candidate in "${CANDIDATES[@]}"; do
+    [[ -x "$candidate" ]] || continue
+    if "$candidate" -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")' >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+    echo "waybar-ai-quota: GTK4/PyGObject bulunan Python yorumlayıcısı yok." >&2
+    echo "  Fedora: sudo dnf install python3-gobject gtk4 libadwaita gtk4-layer-shell" >&2
+    echo "  veya WAYBAR_AI_QUOTA_PYTHON=/usr/bin/python3 ile belirtin." >&2
+    exit 1
+fi
+
+export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# PID dosyasını exec'ten önce yaz: hızlı çift tıklamada ikinci çağrı
+# aynı süreci görüp paneli kapatabilsin (exec PID'yi korur).
+mkdir -p "$(dirname "$PID_FILE")" 2>/dev/null || true
+printf '%s\n' "$$" > "$PID_FILE" 2>/dev/null || true
+chmod 600 "$PID_FILE" 2>/dev/null || true
+
+exec "$PYTHON_BIN" "$UI_FILE" "$@"

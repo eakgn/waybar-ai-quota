@@ -12,7 +12,7 @@
   - Mevcut Catppuccin Mocha (`#1e1e2e`, `#cdd6f4`, `#89b4fa`, `#a6e3a1`, `#f9e2af`, `#f38ba8`) hap (pill) tasarımına birebir uyumlu çalışır.
   - Bar üzerinde anlık durumu özetler:
     - Aktif oturum varsa: `⚡ [Model Kısa Adı] · AG %XX · Go %YY` (veya en kritik kota yüzdesi).
-    - Boştaysa: `󰚩 AG %XX · Go %YY · GH %ZZ`.
+    - Boştaysa: `🤖 AG %XX · Go %YY · GH %ZZ`.
     - Çift Antigravity çakışması veya kritik kota (<%15) durumunda CSS sınıfı (`warning`, `critical`, `conflict`) ile görsel uyarı verir.
 - **Tıklanınca Açılan Panel (GTK4 + Libadwaita + Gtk4LayerShell Popover):**
   - Waybar modülüne sol tıklandığında ekranın sağ üst köşesinde (Waybar'ın hemen altında) Wayland `gtk4-layer-shell` protokolüyle pencere yöneticisiyle (Sway) çakışmayan, şık bir Catppuccin Mocha kontrol paneli açılır.

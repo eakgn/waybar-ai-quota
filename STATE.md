@@ -8,7 +8,7 @@
   - GTK4 + Libadwaita + `Gtk4LayerShell` sağ-üst açılır kontrol paneli (canlı oturumlar, ilerleme çubukları, manuel yenileme butonu, Go kalibrasyon girişi, `wl-copy` ile tek tıkla `/model` kopyalama).
 
 ## Aktif Görev
-Çekirdek veri toplayıcıların, öneri motorunun, GTK4 Layer-Shell arayüzünün, Waybar entegrasyonunun alt ajanlar (subagents) ile kodlanması, test edilmesi ve GitHub üzerinde public repo olarak yayınlanması.
+Tamamlandı — GitHub public repo yayını ve canlı Waybar entegrasyonu aktif.
 
 ## Tamamlanan Adımlar
 - [x] Sistem keşfi (Waybar 0.14.0, Sway, GTK 4.20.4 + Adw + Gtk4LayerShell 1.3.0, OpenCode SQLite şeması, Antigravity önbellek yapısı, GitHub Copilot API erişimi) tamamlandı.
@@ -26,14 +26,11 @@
 - [x] `README.md` (kapsamlı Türkçe + İngilizce özet), MIT `LICENSE` ve `install.sh` (uv Python 3.12 `.venv`, editable kurulum, `~/.local/bin` sembolik bağı) hazırlandı.
 - [x] `tests/test_core.py` eklendi: `models`, `recommender`, `collectors` (geçici SQLite + sahte Antigravity/Copilot verisi) ve `cli` JSON çıktısı; 38 testin tamamı geçiyor.
 - [x] Waybar entegrasyonu tamamlandı: `~/.config/waybar/config.jsonc` içinde `custom/ai-quota` `modules-right` başına eklendi; `style.css` ortak hap seçicisi ve `normal/active/warning/critical/conflict` Catppuccin Mocha sınıfları eklendi.
-- [x] `~/.local/bin/waybar-ai-quota` -> `/home/eakgn/waybar-ai-quota/bin/waybar-ai-quota` sembolik bağı oluşturuldu; Waybar `SIGUSR2` ile yeniden yüklendi ve modül komutu JSON üretti.
+- [x] `~/.local/bin/waybar-ai-quota` -> `~/waybar-ai-quota/bin/waybar-ai-quota` sembolik bağı oluşturuldu; Waybar `SIGUSR2` ile yeniden yüklendi ve modül komutu JSON üretti.
 
 ## Sonraki Adım
-1. GitHub üzerinde public repo oluşturup ilk commit'i yayınla (depo URL'sini README'deki `<DEPO_URL>` yerine koy).
-2. Ekran görüntüsü ekle ve README'ye bağla.
-3. Uçtan uca kullanıcı testi: Waybar tıklaması, GTK panel aç/kapat, canlı yenileme, kritik kota bildirimi ve çift Antigravity uyarısı.
+- GitHub Student Developer Pack onaylandığında `gh api /copilot_internal/user` otomatik olarak `Copilot Student` planına geçecek; ek yapılandırma gerekmez.
 
 ## Bilinen Sorunlar
-- Fedora 43'te `python3-gobject` (`gi`) sistem Python 3.14 altında hazır kurulu, `gtk4-devel` / `gobject-introspection-devel` ise kurulu değil. Çözüm: Çekirdek paket ve testler `uv` Python 3.12 `.venv` ile çalışırken, GTK4 UI başlatıcısı `.venv` içinde `gi` bulamazsa otomatik olarak sistem `/usr/bin/python3` GObject bağlamını kullanarak sıfır derleme sorunuyla çalışacak.
-- Sistemde Nerd Font kurulu değilse başlıktaki `󰚩` (U+F06A9) glyph'i tofu olarak görünebilir; Nerd Font paketi kurulduğunda düzelir. Panelin geri kalanı Noto Emoji ile sorunsuz çalışıyor.
+- Fedora 43'te `python3-gobject` (`gi`) sistem Python 3.14 altında hazır kurulu, `gtk4-devel` / `gobject-introspection-devel` ise kurulu değil. Çözüm: Çekirdek paket ve testler `uv` Python 3.12 `.venv` ile çalışırken, GTK4 UI başlatıcısı `.venv` içinde `gi` bulamazsa otomatik olarak sistem `/usr/bin/python3` GObject bağlamını kullanarak sıfır derleme sorunuyla çalışıyor.
 - `Adw.ApplicationWindow` başlatılırken GtkSettings kaynaklı `gtk-application-prefer-dark-theme` uyarısı stderr'e düşebilir; işlevsel etkisi yoktur (tema `Adw.StyleManager.FORCE_DARK` ile ayarlanıyor).

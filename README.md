@@ -129,7 +129,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Kurulum
 
 ```bash
-git clone <DEPO_URL> waybar-ai-quota
+git clone https://github.com/eakgn/waybar-ai-quota.git waybar-ai-quota
 cd waybar-ai-quota
 ./install.sh
 ```

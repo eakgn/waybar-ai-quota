@@ -81,8 +81,36 @@ def _pool_for_model(model_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_token_from_value(raw_val: Any) -> str | None:
+    if not raw_val:
+        return None
+    text = str(raw_val).strip()
+    if not text:
+        return None
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        if isinstance(parsed, dict):
+            for key in ("access", "access_token", "accessToken", "key", "apiKey", "api_key", "token"):
+                cand = parsed.get(key)
+                if isinstance(cand, str) and cand.strip():
+                    return cand.strip()
+        return None
+    return text
+
+
 def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
-    """`opencode.db` içinden yalnızca bellek içi kullanım için token + orgID okur."""
+    """`opencode.db` içinden yalnızca bellek içi kullanım için token + orgID okur.
+
+    Desteklenen gerçek OpenCode v2 tabloları:
+    - `credential` (`integration_id`/`connector_id`/`label`, `value`, `active`)
+    - `control_account` (`access_token`, `active`, `time_updated`)
+    - `workspace` (`id`, `provider`, `last_used_at`)
+
+    Token, e-posta ve orgID asla loga, önbelleğe veya çıktıya yazılmaz.
+    """
     if not db_path.is_file():
         return None, None
     try:
@@ -96,36 +124,67 @@ def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
             str(r["name"])
             for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
+
+        # 1. Öncelik: `credential` tablosunda opencode-go / opencode kaydı (active öncelikli)
         if "credential" in tables:
-            rows = con.execute("SELECT * FROM credential").fetchall()
-            for row in rows:
-                cols = row.keys()
-                raw_text = " ".join(str(row[c] or "") for c in cols).lower()
-                if "opencode" not in raw_text:
-                    continue
-                for col in ("data", "value", "secret", "credentials"):
-                    if col in cols and row[col]:
-                        try:
-                            parsed = json.loads(str(row[col]))
-                        except ValueError:
-                            continue
-                        if isinstance(parsed, dict):
-                            candidate = (
-                                parsed.get("access")
-                                or parsed.get("access_token")
-                                or parsed.get("accessToken")
-                                or parsed.get("key")
-                                or parsed.get("token")
-                            )
-                            if isinstance(candidate, str) and candidate.strip():
-                                token = candidate.strip()
+            cols = {
+                str(r["name"]) for r in con.execute("PRAGMA table_info(credential)").fetchall()
+            }
+            order = "ORDER BY COALESCE(active, 0) DESC, time_updated DESC" if "active" in cols and "time_updated" in cols else ""
+            rows = con.execute(f"SELECT * FROM credential {order}").fetchall()
+            # Önce açıkça `opencode-go`, sonra genel `opencode`
+            for needle in ("opencode-go", "opencode"):
+                for row in rows:
+                    row_cols = row.keys()
+                    meta = " ".join(
+                        str(row[c] or "")
+                        for c in ("integration_id", "connector_id", "label", "provider", "id")
+                        if c in row_cols
+                    ).lower()
+                    if needle not in meta:
+                        continue
+                    for val_col in ("value", "data", "secret", "credentials"):
+                        if val_col in row_cols and row[val_col]:
+                            candidate = _extract_token_from_value(row[val_col])
+                            if candidate:
+                                token = candidate
                                 break
+                    if token:
+                        break
                 if token:
                     break
+
+        # 2. Yedek: `control_account` tablosunda aktif OAuth access_token
+        if not token and "control_account" in tables:
+            cols = {
+                str(r["name"])
+                for r in con.execute("PRAGMA table_info(control_account)").fetchall()
+            }
+            if "access_token" in cols:
+                where = "WHERE active = 1" if "active" in cols else ""
+                order = "ORDER BY time_updated DESC" if "time_updated" in cols else ""
+                row = con.execute(
+                    f"SELECT access_token FROM control_account {where} {order} LIMIT 1"
+                ).fetchone()
+                if row and row["access_token"]:
+                    cand = str(row["access_token"]).strip()
+                    if cand:
+                        token = cand
+
+        # 3. `workspace` tablosundan en son kullanılan org/workspace kimliği
         if "workspace" in tables:
-            row = con.execute("SELECT id FROM workspace LIMIT 1").fetchone()
-            if row and row["id"]:
-                org_id = str(row["id"]).strip()
+            cols = {
+                str(r["name"]) for r in con.execute("PRAGMA table_info(workspace)").fetchall()
+            }
+            if "id" in cols:
+                order = "ORDER BY last_used_at DESC" if "last_used_at" in cols else ""
+                rows = con.execute(f"SELECT * FROM workspace {order} LIMIT 10").fetchall()
+                for row in rows:
+                    if "provider" in row.keys() and "opencode" in str(row["provider"] or "").lower():
+                        org_id = str(row["id"]).strip()
+                        break
+                if not org_id and rows and rows[0]["id"]:
+                    org_id = str(rows[0]["id"]).strip()
     except sqlite3.Error:
         pass
     finally:

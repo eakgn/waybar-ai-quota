@@ -385,6 +385,65 @@ class TestAdaptersAndEngine(unittest.TestCase):
         self.assertNotIn("SECRET_TOKEN_DO_NOT_LEAK", cache_text)
         self.assertNotIn("ws_secret_org_123", cache_text)
 
+    def test_opencode_go_reads_real_v2_control_account_and_credential_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "opencode_v2.db"
+            con = sqlite3.connect(db)
+            con.executescript(
+                """
+                CREATE TABLE control_account (
+                    email text NOT NULL,
+                    url text NOT NULL,
+                    access_token text NOT NULL,
+                    refresh_token text NOT NULL,
+                    token_expiry integer,
+                    active integer NOT NULL,
+                    time_created integer NOT NULL,
+                    time_updated integer NOT NULL
+                );
+                CREATE TABLE credential (
+                    id text PRIMARY KEY,
+                    integration_id text,
+                    label text NOT NULL,
+                    value text NOT NULL,
+                    connector_id text,
+                    method_id text,
+                    active integer,
+                    time_created integer NOT NULL,
+                    time_updated integer NOT NULL
+                );
+                CREATE TABLE workspace (
+                    id text PRIMARY KEY,
+                    provider text NOT NULL,
+                    binding text,
+                    created_at integer NOT NULL,
+                    last_used_at integer NOT NULL
+                );
+                INSERT INTO control_account VALUES
+                    ('a@example.com', 'https://opencode.ai', 'TOK_CTRL_ACTIVE', 'REF', NULL, 1, 100, 200);
+                INSERT INTO workspace VALUES
+                    ('ws_old', 'other', NULL, 100, 150),
+                    ('ws_go_latest', 'opencode', NULL, 100, 300);
+                """
+            )
+            con.commit()
+
+            # credential boşken control_account'tan active access_token ve opencode workspace okunmalı
+            tok, org = opencode_go_provider._read_go_credentials(db)
+            self.assertEqual(tok, "TOK_CTRL_ACTIVE")
+            self.assertEqual(org, "ws_go_latest")
+
+            # credential tablosunda opencode-go ham anahtar eklendiğinde öncelik almalı
+            con.execute(
+                "INSERT INTO credential VALUES ('c1', 'opencode-go', 'Go Key', 'RAW_GO_KEY', 'opencode-go', 'api', 1, 100, 400)"
+            )
+            con.commit()
+            con.close()
+
+            tok2, org2 = opencode_go_provider._read_go_credentials(db)
+            self.assertEqual(tok2, "RAW_GO_KEY")
+            self.assertEqual(org2, "ws_go_latest")
+
 
 if __name__ == "__main__":
     unittest.main()

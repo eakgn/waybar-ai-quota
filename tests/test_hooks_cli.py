@@ -262,6 +262,12 @@ class TestCLIAndFormatters(unittest.TestCase):
             self.assertEqual(mocked.call_args.kwargs["action"], "toggle")
             self.assertFalse(mocked.call_args.kwargs["tray_mode"])
 
+    def test_setup_transparency_note_mentions_antigravity_tos_and_usage(self) -> None:
+        from agent_notifier import setup_cmd
+
+        self.assertIn("ToS", setup_cmd.ANTIGRAVITY_QUOTA_NOTE)
+        self.assertIn("/usage", setup_cmd.ANTIGRAVITY_QUOTA_NOTE)
+
 
 class TestLinuxIconsAndSNI(unittest.TestCase):
     def test_svg_and_argb32_icons_for_all_states(self) -> None:

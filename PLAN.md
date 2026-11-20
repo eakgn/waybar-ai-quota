@@ -105,13 +105,13 @@ Her döngü **çalışan, doğrulanabilir ve testli bir çıktı** üretir; risk
   - [x] Bar çıktıları (`--format waybar|polybar|swaybar|tmux|plain|json`).
   - [x] `./install.sh`, `agent-notifier setup`, `doctor`, `.bak` yedekli `hooks print|install|uninstall`, `uninstall`.
 
-### Sprint 1.1 — MVP Hata Düzeltme & Gerçek Doğrulama (Küçük Mikro-Adımlar)
+### Sprint 1.1 — MVP Hata Düzeltme & Gerçek Doğrulama [TAMAMLANDI]
 > Ayrıntılı kök neden raporu: [docs/DEBUG_REPORT_2026-11-21.md](docs/DEBUG_REPORT_2026-11-21.md)
 
 - [x] **Mikro-Adım 1 (Tray & Bar Tıklama / Yaşam Döngüsü):** `dashboard`/`ui` `--toggle`/`--close`, D-Bus tek-örnek uzaktan toggle, `Gtk4LayerShell` destroy/recreate, SNI kayıt yarışı, `app.py` active/idle yenileme aralığı, `_pending_refresh` kuyruğu ve hata loglama (**B1, B2, B6, B7, B8, B9**).
-- [ ] **Mikro-Adım 2 (OpenCode v2 Eklenti + Pull/Push Uzlaşması):** `opencode_plugin_source` OpenCode v2 `export default { id, setup(ctx) }` sözleşmesine güncelleme + canlı doğrulama + `opencode_harness.py` zaman yarışı düzeltmesi (**B3, B12**).
-- [ ] **Mikro-Adım 3 (Antigravity Native Plugin + Hook Sözleşmesi):** `~/.gemini/config/plugins/agent-notifier/{plugin.json,hooks.json}` paket yapısı + `PreToolUse` `decision` + `Stop` `terminationReason`/`modelName` desteği (**B4, B10**).
-- [ ] **Mikro-Adım 4 (Go Canlı API Şema Doğrulama + Bildirim + Antigravity Kota UX):** `opencode.db` gerçek kimlik tablosu doğrulaması, `notifier.py` çift bildirim düzeltmesi ve Antigravity kota ToS açıklamasının `setup`/Dashboard'a işlenmesi (**B5, B11, B13**).
+- [x] **Mikro-Adım 2 (OpenCode v2 Eklenti + Pull/Push Uzlaşması):** `opencode_plugin_source` OpenCode v2 `export default { id, setup(ctx) }` sözleşmesine güncelleme + Node ESM testi + `opencode_harness.py` in-flight zaman yarışı düzeltmesi (**B3, B12**).
+- [x] **Mikro-Adım 3 (Antigravity Native Plugin + Hook Sözleşmesi):** `~/.gemini/config/plugins/agent-notifier/{plugin.json,hooks.json}` paket yapısı + eski `hooks.json` temizliği + `PreToolUse` `decision` + `Stop` `terminationReason`/`modelName` desteği (**B4, B10**).
+- [x] **Mikro-Adım 4 (Go Canlı API Şema Doğrulama + Bildirim + Antigravity Kota UX):** Gerçek `opencode.db` v2 DDL (`control_account` + `credential` + `workspace`) doğrulaması, `notifier.py` çift bildirim düzeltmesi ve Antigravity kota ToS şeffaflık notu (**B5, B11, B13**).
 
 ### Sprint 2 — Çoklu Harness & API Genişlemesi
 - **Claude Code:** `~/.claude/projects/**/*.jsonl` + `/statusline` pasif `rate_limits` köprüsü + hook desteği.

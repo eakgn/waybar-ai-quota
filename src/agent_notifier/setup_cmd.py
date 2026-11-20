@@ -13,6 +13,12 @@ from . import config as cfg_mod
 from . import hooks as hooks_mod
 from .adapters import detect_environment, harness_infos, provider_infos
 
+ANTIGRAVITY_QUOTA_NOTE = (
+    "Not: Antigravity canlı kota yüzdesi Google ToS (Ek Koşullar §6 — üçüncü taraf erişim / "
+    "sarma yasağı) gereği dışarıdan çekilmez; yalnız oturum durumu pasif plugin ile izlenir "
+    "(canlı kota için `agy /usage` veya Antigravity App)."
+)
+
 
 def autostart_desktop_path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
@@ -209,6 +215,7 @@ def run_setup(*, non_interactive: bool = False) -> dict[str, Any]:
         tag = "algılandı" if found else "algılanmadı"
         enabled = _ask_yes_no(f"  - {info.label} ({tag})", default=found)
         cfg = cfg_mod.set_toggle(cfg, "providers", info.key, enabled)
+    print(f"  ℹ {ANTIGRAVITY_QUOTA_NOTE}")
 
     saved = cfg_mod.save_config(cfg)
     print(f"\nYapılandırma kaydedildi: {saved}")
@@ -216,8 +223,9 @@ def run_setup(*, non_interactive: bool = False) -> dict[str, Any]:
     installed_hooks: list[str] = []
     for h_key in cfg_mod.enabled_harnesses(cfg):
         if h_key in hooks_mod.SUPPORTED_HOOK_HARNESSES:
+            extra = " (~/.gemini/config/plugins/agent-notifier/)" if h_key == "antigravity" else " (.bak yedekli)"
             if _ask_yes_no(
-                f"\n3) {h_key} için anlık 'soru bekliyor / bitti' hook'u kurulsun mu? (.bak yedekli)",
+                f"\n3) {h_key} için anlık 'soru bekliyor / bitti' eklentisi kurulsun mu?{extra}",
                 default=True,
             ):
                 res = hooks_mod.install_hook(h_key)

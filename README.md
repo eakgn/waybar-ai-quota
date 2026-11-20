@@ -26,7 +26,8 @@ Başka bir işle uğraşırken arka planda çalışan AI oturumlarının **soru/
   - Yalnızca kullandığın harness ve kota sağlayıcıları (`config.toml` veya Dashboard `⚙` ayarlarından) açılır; kapalı olanlar ne sorgulanır ne ekranda yer kaplar.
 - **Sıfır OAuth/Cookie Scraping (ToS-Güvenli Mimari):**
   - Yalnız salt-okunur yerel veritabanları (`mode=ro`), resmî API uçları ve resmî harness hook'ları kullanılır.
-  - **Sprint 1 Adaptörleri:** OpenCode (`opencode.db` + `parent_id` ağacı), Antigravity (`agy` pasif hook), OpenCode Go (resmî `/zen/go/v1/usage` + yerel DB fallback), GitHub Copilot (`gh api`, opt-in).
+  - **Sprint 1 Adaptörleri:** OpenCode (`opencode.db` + `parent_id` ağacı), Antigravity (`~/.gemini/config/plugins/agent-notifier/` yerel plugin), OpenCode Go (resmî `/zen/go/v1/usage` + yerel DB fallback), GitHub Copilot (`gh api`, opt-in).
+  - **Antigravity Kota Şeffaflığı:** Google harici bir Antigravity kota API'si sunmaz; OAuth yenileme veya arka planda `/usage` kazıma Antigravity Ek Koşulları §6 açısından kalıcı ban riski taşır. Bu nedenle Antigravity yalnızca pasif oturum durumu olarak izlenir, canlı kota `agy /usage` / Antigravity App içinde kalır.
 
 ---
 

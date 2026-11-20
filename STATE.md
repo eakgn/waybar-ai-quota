@@ -6,26 +6,27 @@
 - **Linux Katmanı (`src/agent_notifier/linux/`):** `icons.py` (6 durumlu SVG + ARGB32 `IconPixmap`), `sni.py` (saf `Gio.DBus` `StatusNotifierItem` + `dbusmenu`), `styles.py`, `widgets.py`, `app.py` (GTK4/Adw + `Gtk4LayerShell` destroy/recreate + D-Bus tek-örnek uzaktan toggle).
 
 ## Aktif Görev
-**Sprint 1.1 (MVP Hata Düzeltme — Mikro-Adımlar):**
-- Canlı test sonrası tam denetim raporu [docs/DEBUG_REPORT_2026-11-21.md](docs/DEBUG_REPORT_2026-11-21.md) içine işlendi.
-- **Mikro-Adım 1 tamamlandı** (Waybar `ui --toggle` / `--close`, D-Bus uzaktan Dashboard toggle, `Gtk4LayerShell` destroy/recreate, SNI kayıt yarışı, `app.py` adaptive interval + `_pending_refresh` kuyruğu).
-- Sıradaki tek adım: Mikro-Adım 1 canlı doğrulaması sonrası **Mikro-Adım 2** (OpenCode v2 eklenti şeması).
+**Sprint 1.1 (MVP Hata Düzeltme) TAMAMLANDI** — 13/13 hata sırayla düzeltildi, atomik commit'lendi ve 19/19 birim testi geçti. Canlı ortamda yeni OpenCode v2 ve Antigravity native plugin'lerinin yeniden kurulup doğrulanması bekleniyor.
 
 ## Tamamlanan Adımlar
 - [x] `v0.1.0` git etiketi oluşturuldu; Sprint 0 ve Sprint 1 temel kod tabanı kuruldu (`343a282`).
-- [x] Canlı Fedora 43 / Sway / Waybar 0.14.0 testi sonrası 13 maddelik kök neden ve mantık hatası denetim raporu yazıldı ([docs/DEBUG_REPORT_2026-11-21.md](docs/DEBUG_REPORT_2026-11-21.md)).
-- [x] **Sprint 1.1 / Mikro-Adım 1:** B1 (`ui --toggle`/`--close`), B2 (`Gtk4LayerShell` destroy/recreate + D-Bus single-instance toggle), B6 (SNI kayıt yarışı), B7 (gerçek active/idle yenileme aralığı), B8 (`_pending_refresh` kuyruğu), B9 (hata loglama) düzeltildi ve test edildi.
+- [x] Canlı test sonrası 13 maddelik kök neden raporu yazıldı ([docs/DEBUG_REPORT_2026-11-21.md](docs/DEBUG_REPORT_2026-11-21.md)).
+- [x] **B1, B2, B6, B7, B8, B9** (`97fc743`): Waybar `ui --toggle`, D-Bus uzaktan toggle, `Gtk4LayerShell` destroy/recreate, SNI yarış düzeltmesi, adaptive refresh & kuyruk, hata loglama.
+- [x] **B3** (`c96aca5`): OpenCode v2 plugin (`export default { id, setup }`) + Node ESM doğrulaması.
+- [x] **B12** (`52b594d`): `opencode_harness.py` in-flight `waiting_input` ↔ DB uzlaşması.
+- [x] **B4** (`93a2c92`): Antigravity native plugin (`~/.gemini/config/plugins/agent-notifier/{plugin.json,hooks.json}`) + eski `hooks.json` temizliği.
+- [x] **B10** (`a76a21a`): Antigravity `PreToolUse`/`Stop` JSON sözleşmesi ve `modelName` camelCase.
+- [x] **B11** (`e5278b6`): `opencode_go_provider.py` gerçek `opencode.db` v2 DDL (`control_account` + `credential` + `workspace`) uyumu.
+- [x] **B13** (`72596e2`): `notifier.py` sabit oturum anahtarı ile çift `done` bildiriminin önlenmesi + 24s budama.
+- [x] **B5**: Antigravity kota ToS şeffaflık notu (`setup`, Dashboard, `README.md`) ve `Stop` hook + `/usage` fikrinin teknik/ToS değerlendirmesi.
 
 ## Sonraki Adım
-1. Canlı masaüstünde `agent-notifier tray` yeniden başlatılarak hem Waybar `custom/ai-quota` hem sağ üst `tray` tıklamasını doğrulamak.
-2. **Mikro-Adım 2:** OpenCode v2 eklentisini (`export default { id, setup(ctx) }`) canlı OpenCode ile doğrulayıp düzeltmek (**B3, B12**).
-3. **Mikro-Adım 3:** Antigravity'yi gerçek plugin paketine (`~/.gemini/config/plugins/agent-notifier/`) taşıyıp `hooks.md` sözleşmesini tamamlamak (**B4, B10**).
-4. **Mikro-Adım 4:** `opencode.db` kimlik şeması doğrulaması, `notifier.py` çift bildirim düzeltmesi ve Antigravity kota ToS UX netleştirmesi (**B5, B11, B13**).
+1. Canlı masaüstünde yeni eklentileri yeniden kurup doğrulamak:
+   - `agent-notifier hooks install opencode` (OpenCode'u açıp `err_0373493e` olmadığını doğrula)
+   - `agent-notifier hooks install antigravity` (Antigravity App Plugins listesinde veya `agy plugin list`'te `agent-notifier`'ı doğrula)
+   - `agent-notifier status --refresh` ile OpenCode Go canlı API (`source: "hybrid"`) yanıtını doğrula.
+2. MVP canlıda pürüzsüz doğrulandıktan sonra **Sprint 2** (Claude Code + Codex CLI + OpenRouter).
 
-## Bilinen Sorunlar (Açık Kayıt — Ayrıntı: `docs/DEBUG_REPORT_2026-11-21.md`)
-- **B3 (Açık — Kritik):** `~/.config/opencode/plugins/agent-notifier.js` v1 formatında üretildiği için OpenCode v2'de `err_0373493e` hatası veriyor. Geçici çözüm: `agent-notifier hooks uninstall opencode`; kalıcı düzeltme Mikro-Adım 2'de.
-- **B4 & B10 (Açık):** Antigravity hook'u `~/.gemini/config/hooks.json` yerine `~/.gemini/config/plugins/agent-notifier/{plugin.json,hooks.json}` olarak paketlenmeli; `PreToolUse` `decision` ve `Stop` `terminationReason`/`modelName` işlenmeli (Mikro-Adım 3).
-- **B5 (Açık — UX/ToS):** Antigravity canlı kotası ToS (Ek Koşullar §6 — ikinci ihlal kalıcı ban) gereği dışarıdan çekilmiyor; ancak bu kısıt `setup` ve Dashboard'da kullanıcıya açıkça belirtilmeli (Mikro-Adım 4).
-- **B11 (Açık):** `opencode_go_provider.py` içindeki `credential`/`control_account` sütun adları canlı `opencode.db` şemasına göre doğrulanmalı (Mikro-Adım 4).
-- **B12 (Açık):** `opencode_harness.py` Push `waiting_input` ↔ Pull `time_updated` 2 sn zaman yarışı (Mikro-Adım 2).
-- **B13 (Açık):** `notifier.py` `done` bildirim anahtarında saniye hassasiyeti nedeniyle çift bildirim riski (Mikro-Adım 4).
+## Bilinen Sorunlar
+- Açık kritik hata yok (B1–B13 tamamı kapatıldı).
+- Antigravity canlı kota yüzdesi Google harici bir API veya hook payload alanı sunmadığı sürece ToS gereği dışarıdan çekilmez (`agy /usage` içinde izlenir).

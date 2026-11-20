@@ -282,7 +282,12 @@ def build_settings_panel(
     _add_group("GÖSTERİLEN KOTA SAĞLAYICILARI (OPT-IN)", "providers", provider_infos())
 
     note = Gtk.Label(
-        label="Kapalı kaynaklar sorgulanmaz ve dashboard'da yer kaplamaz. Değişiklikler anında kaydedilir.",
+        label=(
+            "Kapalı kaynaklar sorgulanmaz ve dashboard'da yer kaplamaz. Değişiklikler anında kaydedilir.\n\n"
+            "Antigravity şeffaflık notu: Canlı kota yüzdesi Google ToS gereği dışarıdan çekilmez "
+            "(OAuth / ekran kazıma yok); Antigravity yalnızca pasif oturum eklentisiyle izlenir. "
+            "Canlı kota için `agy /usage` veya Antigravity App kullanın."
+        ),
         xalign=0.0,
         wrap=True,
     )

@@ -51,6 +51,48 @@ class TestHooksSafety(unittest.TestCase):
             self.assertIn("beyin-v3", after)
             self.assertNotIn("agent-notifier", after)
 
+    def test_antigravity_native_plugin_bundle_and_legacy_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_dir = Path(tmp) / "plugins" / "agent-notifier"
+            legacy_hooks = Path(tmp) / "hooks.json"
+            legacy_hooks.write_text(
+                json.dumps(
+                    {
+                        "beyin-v3": {"Stop": []},
+                        "agent-notifier": {"Stop": []},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            # Dry-run plugin oluşturmamalı ve legacy dosyasına dokunmamalı
+            dry = hooks_mod.install_hook(
+                "antigravity", target=plugin_dir, legacy_hooks_path=legacy_hooks, dry_run=True, binary="/bin/an"
+            )
+            self.assertTrue(dry["dry_run"])
+            self.assertFalse(plugin_dir.exists())
+            self.assertIn("agent-notifier", json.loads(legacy_hooks.read_text(encoding="utf-8")))
+
+            # Gerçek kurulum plugin.json + hooks.json yazmalı ve legacy agent-notifier grubunu temizlemeli
+            res = hooks_mod.install_hook(
+                "antigravity", target=plugin_dir, legacy_hooks_path=legacy_hooks, dry_run=False, binary="/bin/an"
+            )
+            self.assertEqual(res["mode"], "plugin")
+            self.assertTrue(res["cleaned_legacy_hooks"])
+            self.assertTrue((plugin_dir / "plugin.json").is_file())
+            self.assertTrue((plugin_dir / "hooks.json").is_file())
+            manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["name"], "agent-notifier")
+
+            legacy_after = json.loads(legacy_hooks.read_text(encoding="utf-8"))
+            self.assertIn("beyin-v3", legacy_after)
+            self.assertNotIn("agent-notifier", legacy_after)
+
+            # Uninstall eklenti dizinini temizlemeli
+            un = hooks_mod.uninstall_hook("antigravity", target=plugin_dir, legacy_hooks_path=legacy_hooks)
+            self.assertTrue(un["changed"])
+            self.assertFalse(plugin_dir.exists())
+
     def test_opencode_plugin_install_and_refuses_foreign_file(self) -> None:
         import shutil
         import subprocess

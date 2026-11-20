@@ -239,6 +239,44 @@ class TestAdaptersAndEngine(unittest.TestCase):
         self.assertEqual(snap_after_ack.sessions[0].state, SessionState.IDLE)
         self.assertEqual(snap_after_ack.global_state, SessionState.IDLE)
 
+    def test_opencode_waiting_input_reconciliation_with_db_writes(self) -> None:
+        env = IsolatedEnv(self)
+        now = time.time()
+        # Oturum in-flight iken t-10sn'de waiting_input geldi, DB t-1sn'de metadata yazdı -> WAITING_INPUT korunmalı
+        env.conn.execute(
+            """
+            INSERT INTO session_v2 (id, parent_id, project_id, directory, title, agent, model,
+                                    cost, tokens_input, tokens_output, tokens_cache_read,
+                                    time_created, time_updated, time_archived, time_suspended)
+            VALUES ('ses_wait', NULL, 'p1', '/tmp/p', 'İzin Bekleyen', 'build', 'opencode-go/deepseek-v4.1-flash',
+                    0.0, 0, 0, 0, ?, ?, NULL, ?)
+            """,
+            (int((now - 30) * 1000), int((now - 1) * 1000), int((now - 1) * 1000)),
+        )
+        env.conn.commit()
+        events_mod.record_event(
+            harness="opencode",
+            session_id="ses_wait",
+            state="waiting_input",
+            ts=now - 10,
+            message="Bash izni bekleniyor",
+        )
+        cfg = cfg_mod.load_config()
+        cfg["providers"]["opencode_go"] = False
+        cfg["harnesses"]["antigravity"] = False
+
+        snap = engine.collect_snapshot(config=cfg, offline=True)
+        self.assertEqual(snap.sessions[0].state, SessionState.WAITING_INPUT)
+
+        # Oturum tamamlandığında (time_suspended = NULL, time_updated > waiting_ts) -> DONE_UNSEEN'e dönmeli
+        env.conn.execute(
+            "UPDATE session_v2 SET time_suspended = NULL, time_updated = ? WHERE id = 'ses_wait'",
+            (int(now * 1000),),
+        )
+        env.conn.commit()
+        snap2 = engine.collect_snapshot(config=cfg, offline=True)
+        self.assertEqual(snap2.sessions[0].state, SessionState.DONE_UNSEEN)
+
     def test_antigravity_passive_events_and_zero_tos_violation(self) -> None:
         IsolatedEnv(self)
         # Kaynak kodda cloudcode veya oauth çağrısı olmadığını doğrula

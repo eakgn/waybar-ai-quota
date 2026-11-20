@@ -102,6 +102,7 @@ class OpenCodeHarnessAdapter:
         }
 
         nodes_by_id: dict[str, SessionNode] = {}
+        in_flight_ids: set[str] = set()
 
         if db_path.is_file():
             try:
@@ -149,6 +150,7 @@ class OpenCodeHarnessAdapter:
                     in_flight = row["time_suspended"] is not None
 
                     if in_flight:
+                        in_flight_ids.add(sid)
                         node_state = SessionState.RUNNING
                     elif updated_ts and age is not None and age <= recent_seconds:
                         if events_mod.is_done_seen(self.info.key, sid, updated_ts, state):
@@ -199,8 +201,14 @@ class OpenCodeHarnessAdapter:
 
             existing = nodes_by_id.get(sid)
             if existing is not None:
-                # Push olayı DB güncellemesinden yeniyse (veya acil bir durumsa) önceliklidir
-                if existing.updated_ts is None or ev.ts >= (existing.updated_ts - 2.0):
+                # Durum uzlaşması (Pull <-> Push):
+                # - Oturum hâlâ in-flight iken gelen `waiting_input` push olayı,
+                #   DB'ye sonradan düşen metadata `time_updated` yazımıyla ezilmez.
+                # - Oturum tamamlandıysa (`not in_flight`) ve DB zamanı push'tan
+                #   belirgin şekilde yeniyse DB durumu kazanır.
+                still_waiting = ev_state == SessionState.WAITING_INPUT and sid in in_flight_ids
+                push_is_fresh = existing.updated_ts is None or ev.ts >= (existing.updated_ts - 2.0)
+                if still_waiting or push_is_fresh:
                     existing.state = ev_state
                     existing.effective_state = ev_state
                     existing.updated_ts = max(existing.updated_ts or 0.0, ev.ts)

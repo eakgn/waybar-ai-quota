@@ -71,11 +71,11 @@ def _gi_available() -> bool:
         return False
 
 
-def _launch_gui(*, tray_mode: bool, config: dict[str, Any]) -> int:
+def _launch_gui(*, tray_mode: bool, config: dict[str, Any], action: str = "open") -> int:
     if _gi_available():
         from .linux.app import run_gui
 
-        return run_gui(tray_mode=tray_mode)
+        return run_gui(tray_mode=tray_mode, action=action)
 
     gtk_py = str(cfg_mod.get(config, "ui.gtk_python", "/usr/bin/python3") or "/usr/bin/python3")
     python = gtk_py if Path(gtk_py).exists() else (shutil.which("python3") or sys.executable)
@@ -85,7 +85,7 @@ def _launch_gui(*, tray_mode: bool, config: dict[str, Any]) -> int:
     env["PYTHONPATH"] = src_root + (os.pathsep + prev if prev else "")
     args = [python, "-m", "agent_notifier.linux.app"]
     if not tray_mode:
-        args.append("--dashboard")
+        args.extend(["--dashboard", f"--action={action}"])
     try:
         return subprocess.call(args, env=env)
     except OSError as exc:
@@ -102,8 +102,13 @@ def cmd_tray(_args: argparse.Namespace) -> int:
     return _launch_gui(tray_mode=True, config=cfg_mod.load_config())
 
 
-def cmd_dashboard(_args: argparse.Namespace) -> int:
-    return _launch_gui(tray_mode=False, config=cfg_mod.load_config())
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    action = "open"
+    if getattr(args, "close", False):
+        action = "close"
+    elif getattr(args, "toggle", False):
+        action = "toggle"
+    return _launch_gui(tray_mode=False, config=cfg_mod.load_config(), action=action)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -281,7 +286,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tray.set_defaults(func=cmd_tray)
 
     for alias in ("dashboard", "ui"):
-        p_dash = sub.add_parser(alias, help="Dashboard penceresini doğrudan aç")
+        p_dash = sub.add_parser(alias, help="Dashboard penceresini aç / kapat (çalışan tray varsa onu tetikler)")
+        p_dash.add_argument("-t", "--toggle", action="store_true", help="Açıksa kapat, kapalıysa aç")
+        p_dash.add_argument("-c", "--close", action="store_true", help="Açık Dashboard penceresini kapat")
         p_dash.set_defaults(func=cmd_dashboard)
 
     p_status = sub.add_parser("status", help="Tam normalize durumu JSON olarak yazdır")

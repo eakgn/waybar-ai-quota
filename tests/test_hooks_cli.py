@@ -137,6 +137,24 @@ class TestCLIAndFormatters(unittest.TestCase):
         self.assertIn("%{F#f9e2af}", pb)
         self.assertIn("demo", pb)
 
+    def test_dashboard_and_ui_accept_toggle_and_close_flags(self) -> None:
+        parser = cli.build_parser()
+        for cmd in ("dashboard", "ui"):
+            args_t = parser.parse_args([cmd, "--toggle"])
+            self.assertTrue(args_t.toggle)
+            self.assertFalse(args_t.close)
+
+            args_c = parser.parse_args([cmd, "--close"])
+            self.assertTrue(args_c.close)
+            self.assertFalse(args_c.toggle)
+
+        with mock.patch("agent_notifier.cli._launch_gui", return_value=0) as mocked:
+            rc = cli.main(["ui", "--toggle"])
+            self.assertEqual(rc, 0)
+            mocked.assert_called_once()
+            self.assertEqual(mocked.call_args.kwargs["action"], "toggle")
+            self.assertFalse(mocked.call_args.kwargs["tray_mode"])
+
 
 class TestLinuxIconsAndSNI(unittest.TestCase):
     def test_svg_and_argb32_icons_for_all_states(self) -> None:

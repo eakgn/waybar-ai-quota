@@ -7,12 +7,15 @@ modülünde desteklenir.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable
 
 from ..models import STATE_LABELS, SessionState
 from .icons import STATE_ICON_NAMES, argb32_pixmap_for_state, ensure_icon_files
+
+logger = logging.getLogger(__name__)
 
 SNI_INTERFACE = "org.kde.StatusNotifierItem"
 SNI_OBJECT_PATH = "/StatusNotifierItem"
@@ -148,13 +151,16 @@ class StatusNotifierTray:
         self._menu_reg_id = 0
         self._name_owner_id = 0
         self._watcher_watch_id = 0
+        self._name_owned = False
+        self._watcher_present = False
 
     def start(self) -> bool:
         """Oturum D-Bus bağlantısını kurar ve tepsiye kaydolur."""
         Gio = self._Gio
         try:
             self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        except Exception:
+        except Exception as exc:
+            logger.warning("D-Bus oturum veriyoluna bağlanılamadı: %s", exc)
             return False
 
         sni_info = Gio.DBusNodeInfo.new_for_xml(SNI_INTROSPECTION_XML).interfaces[0]
@@ -178,18 +184,34 @@ class StatusNotifierTray:
             self._bus,
             self._bus_name,
             Gio.BusNameOwnerFlags.NONE,
-            lambda _conn, _name: self._register_with_watcher(),
-            None,
+            self._on_name_acquired,
+            self._on_name_lost,
         )
         # Panel / Waybar yeniden başlatılırsa otomatik yeniden kayıt ol
         self._watcher_watch_id = Gio.bus_watch_name_on_connection(
             self._bus,
             WATCHER_BUS,
             Gio.BusNameWatcherFlags.NONE,
-            lambda _conn, _name, _owner: self._register_with_watcher(),
-            None,
+            self._on_watcher_appeared,
+            self._on_watcher_vanished,
         )
         return True
+
+    def _on_name_acquired(self, _conn, _name: str) -> None:
+        self._name_owned = True
+        if self._watcher_present:
+            self._register_with_watcher()
+
+    def _on_name_lost(self, _conn, _name: str) -> None:
+        self._name_owned = False
+
+    def _on_watcher_appeared(self, _conn, _name: str, _owner: str) -> None:
+        self._watcher_present = True
+        if self._name_owned:
+            self._register_with_watcher()
+
+    def _on_watcher_vanished(self, _conn, _name: str) -> None:
+        self._watcher_present = False
 
     def stop(self) -> None:
         Gio = self._Gio
@@ -235,8 +257,8 @@ class StatusNotifierTray:
                 )
             if tip_changed:
                 self._bus.emit_signal(None, SNI_OBJECT_PATH, SNI_INTERFACE, "NewToolTip", None)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("SNI sinyal yayını başarısız: %s", exc)
 
     def _register_with_watcher(self) -> None:
         if self._bus is None:
@@ -256,8 +278,8 @@ class StatusNotifierTray:
                 None,
                 None,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("StatusNotifierWatcher kaydı başarısız: %s", exc)
 
     def _handle_sni_call(
         self, _conn, _sender, _path, _iface, method_name: str, _params, invocation

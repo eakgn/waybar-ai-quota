@@ -148,6 +148,10 @@ def cmd_waybar(args: argparse.Namespace) -> int:
 
 def cmd_event(args: argparse.Namespace) -> int:
     payload = _read_stdin_json_nonblocking() if args.from_stdin else {}
+    hook_event = (
+        getattr(args, "hook_event", "")
+        or str(payload.get("hookEventName") or payload.get("hook_event_name") or "").strip()
+    )
     session_id = (
         args.session
         or str(payload.get("conversationId") or payload.get("session_id") or payload.get("sessionId") or "").strip()
@@ -159,16 +163,30 @@ def cmd_event(args: argparse.Namespace) -> int:
         or None
     )
     project = args.project or _extract_project_from_payload(payload)
-    title = args.title or str(payload.get("title") or "").strip()
+    raw_input = str(payload.get("lastUserInput") or "").strip().splitlines()
+    fallback_title = raw_input[0][:60] if raw_input else ""
+    title = args.title or str(payload.get("title") or "").strip() or fallback_title
     agent = args.agent or str(payload.get("agent") or payload.get("role") or "").strip()
-    model = args.model or str(payload.get("model") or "").strip()
+    model = args.model or str(payload.get("modelName") or payload.get("model") or "").strip()
     message = args.message or str(payload.get("message") or "").strip()
+
+    effective_state = args.state
+    # Antigravity `Stop` payload'ındaki terminationReason / error durumlarını doğru sınıfla
+    if hook_event == "Stop" or "terminationReason" in payload:
+        reason = str(payload.get("terminationReason") or "").upper()
+        err_text = str(payload.get("error") or "").strip()
+        if reason == "ERROR" or err_text:
+            effective_state = "error"
+            if not message and err_text:
+                message = err_text[:140]
+        elif reason == "USER_CANCELED":
+            effective_state = "idle"
 
     try:
         rec = events_mod.record_event(
             harness=args.harness,
             session_id=session_id,
-            state=args.state,
+            state=effective_state,
             parent_id=parent_id,
             is_subagent=bool(args.subagent or parent_id),
             project=project,
@@ -182,8 +200,13 @@ def cmd_event(args: argparse.Namespace) -> int:
         return 2
 
     if args.hook_output:
-        # Antigravity / Claude hook sözleşmesi: stdout geçerli JSON nesnesi olmalı
-        print("{}")
+        # Resmî Antigravity hooks.md stdout sözleşmesi
+        if hook_event == "PreToolUse":
+            print(json.dumps({"decision": "allow"}))
+        elif hook_event == "Stop":
+            print(json.dumps({"decision": "stop"}))
+        else:
+            print("{}")
     elif not args.quiet:
         print(json.dumps({"ok": True, "event": rec.to_dict()}, ensure_ascii=False))
     return 0
@@ -324,7 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev.add_argument("--model", default="", help="Model adı")
     p_ev.add_argument("--message", default="", help="Kullanıcıya gösterilecek kısa mesaj")
     p_ev.add_argument("--from-stdin", action="store_true", help="Hook JSON gövdesini stdin'den oku")
-    p_ev.add_argument("--hook-output", action="store_true", help="Hook sözleşmesi için stdout'a {} yaz")
+    p_ev.add_argument("--hook-output", action="store_true", help="Hook sözleşmesine uygun JSON çıktı üret")
+    p_ev.add_argument("--hook-event", default="", help="Hook olay adı (ör. PreToolUse, Stop)")
     p_ev.add_argument("--quiet", "-q", action="store_true", help="Çıktı yazdırma")
     p_ev.set_defaults(func=cmd_event)
 

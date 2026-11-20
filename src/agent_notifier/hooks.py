@@ -66,7 +66,7 @@ def antigravity_hook_entry(binary: str | None = None) -> dict[str, Any]:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{cmd} event --harness antigravity --state waiting_input --from-stdin --hook-output",
+                        "command": f"{cmd} event --harness antigravity --state waiting_input --hook-event PreToolUse --from-stdin --hook-output",
                         "timeout": 5,
                     }
                 ],
@@ -78,7 +78,7 @@ def antigravity_hook_entry(binary: str | None = None) -> dict[str, Any]:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{cmd} event --harness antigravity --state running --from-stdin --hook-output",
+                        "command": f"{cmd} event --harness antigravity --state running --hook-event PostToolUse --from-stdin --hook-output",
                         "timeout": 5,
                     }
                 ],
@@ -87,7 +87,7 @@ def antigravity_hook_entry(binary: str | None = None) -> dict[str, Any]:
         "Stop": [
             {
                 "type": "command",
-                "command": f"{cmd} event --harness antigravity --state done --from-stdin --hook-output",
+                "command": f"{cmd} event --harness antigravity --state done --hook-event Stop --from-stdin --hook-output",
                 "timeout": 5,
             }
         ],

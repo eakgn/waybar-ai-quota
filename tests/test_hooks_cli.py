@@ -146,15 +146,16 @@ class TestCLIAndFormatters(unittest.TestCase):
                 "AGENT_NOTIFIER_STATE_DIR": str(Path(tmp) / "state"),
                 "AGENT_NOTIFIER_CONFIG_DIR": str(Path(tmp) / "config"),
             }
-            payload = json.dumps(
-                {
-                    "conversationId": "conv-abc-123",
-                    "workspacePaths": ["/home/eakgn/Projects/agent-notifier"],
-                }
-            )
+            payload = {
+                "conversationId": "conv-abc-123",
+                "workspacePaths": ["/home/eakgn/Projects/agent-notifier"],
+                "modelName": "gemini-4-hydrogen-high",
+                "lastUserInput": "Testleri kontrol et",
+                "hookEventName": "PreToolUse",
+            }
             buf = io.StringIO()
             with mock.patch.dict(os.environ, env, clear=False), mock.patch(
-                "agent_notifier.cli._read_stdin_json_nonblocking", return_value=json.loads(payload)
+                "agent_notifier.cli._read_stdin_json_nonblocking", return_value=payload
             ), redirect_stdout(buf):
                 rc = cli.main(
                     [
@@ -163,18 +164,53 @@ class TestCLIAndFormatters(unittest.TestCase):
                         "antigravity",
                         "--state",
                         "waiting_input",
+                        "--hook-event",
+                        "PreToolUse",
                         "--from-stdin",
                         "--hook-output",
                     ]
                 )
             self.assertEqual(rc, 0)
-            self.assertEqual(buf.getvalue().strip(), "{}")
+            self.assertEqual(json.loads(buf.getvalue().strip()), {"decision": "allow"})
             with mock.patch.dict(os.environ, env, clear=False):
                 loaded = events_mod.load_events(harness="antigravity")
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0].session_id, "conv-abc-123")
             self.assertEqual(loaded[0].project, "agent-notifier")
+            self.assertEqual(loaded[0].model, "gemini-4-hydrogen-high")
+            self.assertEqual(loaded[0].title, "Testleri kontrol et")
             self.assertEqual(loaded[0].state, SessionState.WAITING_INPUT)
+
+            # Stop + terminationReason == ERROR -> SessionState.ERROR + {"decision": "stop"}
+            stop_payload = {
+                "conversationId": "conv-abc-123",
+                "hookEventName": "Stop",
+                "terminationReason": "ERROR",
+                "error": "rate limit exceeded",
+            }
+            buf2 = io.StringIO()
+            with mock.patch.dict(os.environ, env, clear=False), mock.patch(
+                "agent_notifier.cli._read_stdin_json_nonblocking", return_value=stop_payload
+            ), redirect_stdout(buf2):
+                rc2 = cli.main(
+                    [
+                        "event",
+                        "--harness",
+                        "antigravity",
+                        "--state",
+                        "done",
+                        "--hook-event",
+                        "Stop",
+                        "--from-stdin",
+                        "--hook-output",
+                    ]
+                )
+            self.assertEqual(rc2, 0)
+            self.assertEqual(json.loads(buf2.getvalue().strip()), {"decision": "stop"})
+            with mock.patch.dict(os.environ, env, clear=False):
+                loaded2 = events_mod.load_events(harness="antigravity")
+            self.assertEqual(loaded2[0].state, SessionState.ERROR)
+            self.assertIn("rate limit", loaded2[0].message)
 
     def test_formatters_waybar_polybar_plain(self) -> None:
         child = SessionNode(id="c1", harness="opencode", state=SessionState.WAITING_INPUT, agent="explore", is_subagent=True)

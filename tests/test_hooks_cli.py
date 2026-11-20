@@ -52,10 +52,39 @@ class TestHooksSafety(unittest.TestCase):
             self.assertNotIn("agent-notifier", after)
 
     def test_opencode_plugin_install_and_refuses_foreign_file(self) -> None:
+        import shutil
+        import subprocess
+
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "agent-notifier.js"
             hooks_mod.install_hook("opencode", target=target, binary="/bin/an")
-            self.assertIn("Managed by agent-notifier", target.read_text(encoding="utf-8"))
+            source = target.read_text(encoding="utf-8")
+            self.assertIn("Managed by agent-notifier", source)
+            # OpenCode v2 default export sözleşmesi: id + setup
+            self.assertIn("export default {", source)
+            self.assertIn('id: "agent-notifier"', source)
+            self.assertIn("async setup(ctx)", source)
+            self.assertNotIn("export const AgentNotifierPlugin", source)
+
+            # Node varsa gerçek ES module söz dizimi + varsayılan export doğrulaması
+            node_bin = shutil.which("node")
+            if node_bin:
+                mjs = Path(tmp) / "agent-notifier.mjs"
+                mjs.write_text(source, encoding="utf-8")
+                proc = subprocess.run(
+                    [
+                        node_bin,
+                        "--input-type=module",
+                        "-e",
+                        f'import mod from "{mjs.as_uri()}"; '
+                        'if (mod.id !== "agent-notifier" || typeof mod.setup !== "function") process.exit(1);',
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
             un = hooks_mod.uninstall_hook("opencode", target=target)
             self.assertTrue(un["changed"])

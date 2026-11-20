@@ -88,7 +88,11 @@ def opencode_plugin_path(target: Path | None = None) -> Path:
 
 
 def opencode_plugin_source(binary: str | None = None) -> str:
-    """OpenCode JS eklentisi: izin/soru bekleme ve bitiş olaylarını anlık bildirir."""
+    """OpenCode v2 JS eklentisi (`export default { id, setup }`).
+
+    Kabuk (shell) açmadan `execFile` ile asenkron çalışır; OpenCode döngüsünü
+    bloklamaz ve enjeksiyon riski taşımaz.
+    """
     cmd = (binary or _agent_notifier_cmd()).replace("\\", "\\\\").replace('"', '\\"')
     return f"""// Managed by agent-notifier (safe to remove via `agent-notifier hooks uninstall opencode`)
 import {{ execFile }} from "node:child_process";
@@ -96,29 +100,56 @@ import {{ execFile }} from "node:child_process";
 const BIN = "{cmd}";
 
 function emit(state, sessionID, extra = []) {{
-  const args = ["event", "--harness", "opencode", "--state", state];
+  const args = ["event", "--harness", "opencode", "--state", state, "--quiet"];
   if (sessionID) args.push("--session", String(sessionID));
   args.push(...extra);
   try {{
-    execFile(BIN, args, {{ timeout: 4000 }}, () => {{}});
+    execFile(BIN, args, {{ timeout: 3000, windowsHide: true }}, () => {{}});
   }} catch {{}}
 }}
 
-export const AgentNotifierPlugin = async ({{ directory }}) => {{
-  const project = directory ? directory.split("/").filter(Boolean).pop() || "" : "";
-  const base = project ? ["--project", project] : [];
-  return {{
-    event: async ({{ event }}) => {{
-      const sid = event?.properties?.sessionID || event?.properties?.info?.id || "";
-      if (event?.type === "permission.asked" || event?.type === "question.asked") {{
+function resolveProject(ctx, ev) {{
+  const dir =
+    ev?.properties?.directory ||
+    ev?.properties?.info?.directory ||
+    ctx?.directory ||
+    ctx?.project?.directory ||
+    "";
+  if (!dir || typeof dir !== "string") return "";
+  return dir.split("/").filter(Boolean).pop() || "";
+}}
+
+export default {{
+  id: "agent-notifier",
+  async setup(ctx) {{
+    const handleEvent = (envelope) => {{
+      const ev = envelope?.event ?? envelope;
+      if (!ev || typeof ev !== "object") return;
+      const type = String(ev.type || "");
+      const props = ev.properties || ev.data || {{}};
+      const sid = props.sessionID || props.sessionId || props.info?.id || "";
+      const project = resolveProject(ctx, ev);
+      const base = project ? ["--project", project] : [];
+
+      if (type === "permission.asked" || type === "question.asked") {{
         emit("waiting_input", sid, [...base, "--message", "OpenCode izin/cevap bekliyor"]);
-      }} else if (event?.type === "session.idle") {{
+      }} else if (type === "permission.replied" || type === "question.replied") {{
+        emit("running", sid, base);
+      }} else if (type === "session.idle") {{
         emit("done", sid, base);
-      }} else if (event?.type === "session.error") {{
+      }} else if (type === "session.error") {{
         emit("error", sid, [...base, "--message", "OpenCode oturumu hata verdi"]);
       }}
-    }},
-  }};
+    }};
+
+    const sub = ctx?.event?.subscribe;
+    if (typeof sub === "function") {{
+      const unsub = await sub.call(ctx.event, handleEvent);
+      if (typeof unsub === "function") {{
+        return () => unsub();
+      }}
+    }}
+  }},
 }};
 """
 

@@ -444,6 +444,90 @@ class TestAdaptersAndEngine(unittest.TestCase):
             self.assertEqual(tok2, "RAW_GO_KEY")
             self.assertEqual(org2, "ws_go_latest")
 
+    def test_notifier_dedupes_trailing_done_writes_and_renotifies_after_new_turn(self) -> None:
+        from agent_notifier import notifier
+        from agent_notifier.models import Snapshot
+
+        IsolatedEnv(self)
+        cfg = cfg_mod.load_config()
+        state = cfg_mod.load_state()
+        now = time.time()
+
+        fake_ok = mock.Mock(returncode=0)
+        with mock.patch.object(notifier, "_can_notify", return_value=True), mock.patch.object(
+            notifier.subprocess, "run", return_value=fake_ok
+        ) as run_mock:
+            snap1 = Snapshot(
+                generated_at="2026-11-21T00:00:00Z",
+                generated_ts=now,
+                global_state=SessionState.DONE_UNSEEN,
+                sessions=[
+                    SessionNode(
+                        id="s1",
+                        harness="opencode",
+                        state=SessionState.DONE_UNSEEN,
+                        project="demo",
+                        updated_ts=now,
+                    )
+                ],
+            )
+            sent1 = notifier.maybe_notify(snap1, config=cfg, state=state)
+            self.assertEqual(sent1, ["done:opencode:s1"])
+
+            # 2 saniye sonra trailing DB yazımı -> çift bildirim GİTMEMELİ
+            snap2 = Snapshot(
+                generated_at="2026-11-21T00:00:02Z",
+                generated_ts=now + 2,
+                global_state=SessionState.DONE_UNSEEN,
+                sessions=[
+                    SessionNode(
+                        id="s1",
+                        harness="opencode",
+                        state=SessionState.DONE_UNSEEN,
+                        project="demo",
+                        updated_ts=now + 2,
+                    )
+                ],
+            )
+            sent2 = notifier.maybe_notify(snap2, config=cfg, state=state)
+            self.assertEqual(sent2, [])
+            self.assertEqual(run_mock.call_count, 1)
+
+            # Yeni tur RUNNING -> ardından tekrar DONE_UNSEEN -> tekrar 1 bildirim gitmeli
+            snap_run = Snapshot(
+                generated_at="2026-11-21T00:00:10Z",
+                generated_ts=now + 10,
+                global_state=SessionState.RUNNING,
+                sessions=[
+                    SessionNode(
+                        id="s1",
+                        harness="opencode",
+                        state=SessionState.RUNNING,
+                        project="demo",
+                        updated_ts=now + 10,
+                    )
+                ],
+            )
+            notifier.maybe_notify(snap_run, config=cfg, state=state)
+
+            snap_done2 = Snapshot(
+                generated_at="2026-11-21T00:00:20Z",
+                generated_ts=now + 20,
+                global_state=SessionState.DONE_UNSEEN,
+                sessions=[
+                    SessionNode(
+                        id="s1",
+                        harness="opencode",
+                        state=SessionState.DONE_UNSEEN,
+                        project="demo",
+                        updated_ts=now + 20,
+                    )
+                ],
+            )
+            sent3 = notifier.maybe_notify(snap_done2, config=cfg, state=state)
+            self.assertEqual(sent3, ["done:opencode:s1"])
+            self.assertEqual(run_mock.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

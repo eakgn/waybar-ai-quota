@@ -55,10 +55,9 @@ def collect_alerts(snapshot: Snapshot, config: dict[str, Any]) -> list[dict[str,
                 }
             )
         elif node.state == SessionState.DONE_UNSEEN and notify_done and not node.is_subagent:
-            ts_bucket = int(node.updated_ts or 0)
             alerts.append(
                 {
-                    "key": f"done:{node.harness}:{node.id}:{ts_bucket}",
+                    "key": f"done:{node.harness}:{node.id}",
                     "title": f"Oturum Tamamlandı · {who}",
                     "body": node.message or f"{node.harness}: {node.title or who} işini bitirdi.",
                     "urgency": "normal",
@@ -120,15 +119,40 @@ def maybe_notify(
     cooldown = int(cfg_mod.get(cfg, "notifications.cooldown_seconds", 300))
     app_name = str(cfg_mod.get(cfg, "notifications.app_name", "agent-notifier"))
 
-    alerts = collect_alerts(snapshot, cfg)
-    if not alerts:
-        return []
-
     history = st.setdefault("notifications", {})
     if not isinstance(history, dict):
         history = {}
         st["notifications"] = history
+
+    # Yeni bir tura (RUNNING) başlayan oturumun eski `done:` kilidini sıfırla ki
+    # yeni tur bitince tekrar tek seferlik bildirim alabilsin; aynı turun 1-2 sn
+    # sonraki trailing DB yazımları ise sabit `done:{harness}:{id}` ile tekilleştirilir.
+    history_dirty = False
+    for node in _iter_nodes(snapshot.sessions):
+        if node.state == SessionState.RUNNING:
+            done_key = f"done:{node.harness}:{node.id}"
+            if done_key in history:
+                del history[done_key]
+                history_dirty = True
+
     now = time.time()
+    # 24 saatten eski bildirim geçmişini buda (state.json şişmesin)
+    cutoff = now - 86400
+    for old_key in list(history):
+        val = history.get(old_key)
+        if isinstance(val, (int, float)) and float(val) < cutoff:
+            del history[old_key]
+            history_dirty = True
+
+    alerts = collect_alerts(snapshot, cfg)
+    if not alerts:
+        if history_dirty:
+            try:
+                cfg_mod.save_state(st)
+            except OSError:
+                pass
+        return []
+
     sent: list[str] = []
 
     for alert in alerts:
@@ -157,7 +181,7 @@ def maybe_notify(
             history[key] = now
             sent.append(key)
 
-    if sent:
+    if sent or history_dirty:
         try:
             cfg_mod.save_state(st)
         except OSError:

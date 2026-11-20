@@ -22,6 +22,7 @@ venv/
 credentials.json
 antigravity-accounts.json
 state.json
+events.json
 *cache*.json
 *.db
 *.db-wal

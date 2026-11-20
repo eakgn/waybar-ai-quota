@@ -1,36 +1,29 @@
-# waybar-ai-quota — Proje Durumu (STATE.md)
+# `agent-notifier` — Proje Durumu (`STATE.md`)
 
 ## Mimari Özeti
-- **Proje Dizini:** `/home/eakgn/waybar-ai-quota`
-- **Çekirdek & Veri Katmanı:** Python (`sqlite3` salt-okunur DB okuyucu, Antigravity kota okuyucu/sorgulayıcı, GitHub Copilot `gh api` sorgulayıcı, OpenCode Go 3-pencereli maliyet/kalibrasyon hesaplayıcı, Görev zorluğu bazlı model öneri motoru, `notify-send` bildirim yöneticisi).
-- **Arayüz Katmanı:**
-  - Waybar `custom/ai-quota` JSON çıktı üreticisi (Catppuccin Mocha uyumlu).
-  - GTK4 + Libadwaita + `Gtk4LayerShell` sağ-üst açılır kontrol paneli (canlı oturumlar, ilerleme çubukları, manuel yenileme butonu, Go kalibrasyon girişi, `wl-copy` ile tek tıkla `/model` kopyalama).
+- **Proje Dizini:** `/home/eakgn/Projects/waybar-ai-quota` (paket: `agent-notifier` `0.2.0`; v0.1.0 `v0.1.0` git etiketiyle korunuyor)
+- **Çekirdek (`src/agent_notifier/`):** OS-bağımsız saf Python — `models.py`, `config.py`, `events.py`, `fsm.py`, `engine.py`, `notifier.py`, `formatters.py`, `hooks.py`, `setup_cmd.py`, `cli.py`, `adapters/` (`opencode`, `antigravity`, `opencode_go`, `github_copilot`).
+- **Linux Katmanı (`src/agent_notifier/linux/`):** `icons.py` (6 durumlu SVG + ARGB32 `IconPixmap`), `sni.py` (saf `Gio.DBus` `StatusNotifierItem` + `dbusmenu`), `styles.py`, `widgets.py` (ana oturum → subagent ağacı, opt-in kota kartı, ayarlar anahtarı), `app.py` (GTK4/Adw + `Gtk4LayerShell` + kayan pencere fallback).
 
 ## Aktif Görev
-Tamamlandı — GitHub public repo yayını ve canlı Waybar entegrasyonu aktif.
+Sprint 0 ve Sprint 1 (MVP) tamamlandı ve doğrulandı — canlı masaüstü kurulumu (`./install.sh`, `agent-notifier setup`, `agent-notifier tray`) ve ardından Sprint 2'ye hazır.
 
 ## Tamamlanan Adımlar
-- [x] Sistem keşfi (Waybar 0.14.0, Sway, GTK 4.20.4 + Adw + Gtk4LayerShell 1.3.0, OpenCode SQLite şeması, Antigravity önbellek yapısı, GitHub Copilot API erişimi) tamamlandı.
-- [x] OpenCode Go (2026) 5-saatlik (%20), haftalık (%50), aylık (%100) USD limit kuralları ve GitHub Student/Copilot API yapısı doğrulandı.
-- [x] Kullanıcı ile ek özellikler, UI tercihi (`GTK4 + Layer-Shell Popover`), Go kalibrasyonu ve proje adı (`waybar-ai-quota`) onaylandı.
-- [x] `SPEC.md` ve `STATE.md` oluşturuldu.
-- [x] `uv` Python 3.12 proje iskeleti, `pyproject.toml`, `.gitignore` ve paket yapısı oluşturuldu.
-- [x] Çekirdek modüller (`models.py`, `config.py`, `collectors.py`, `recommender.py`, `notifier.py`, `cli.py`) yazıldı.
-- [x] GTK4 + Libadwaita + `Gtk4LayerShell` paneli (`src/waybar_ai_quota/ui.py`) yazıldı ve Fedora 43/Sway üzerinde doğrulandı:
-  - 460x760 sağ-üst layer-shell penceresi, `KeyboardMode.ON_DEMAND`, 8/12px marjlar.
-  - Catppuccin Mocha CSS, çift Antigravity uyarı bandı, canlı oturumlar, üç abonelik kartı, öneri motoru ve `/model` kopyalama.
-  - Go kalibrasyonu `state.json` + Waybar `RTMIN+8` sinyaliyle anında yenileniyor; 5 saniyelik sessiz auto-refresh çalışıyor.
-  - `Escape`, `✕ Kapat`, PID tabanlı tek örnek/toggle davranışı doğrulandı.
-- [x] Yürütülebilir başlatıcı `bin/waybar-ai-quota` (gi bulunan Python'u seçen hibrit launcher) yazıldı; sembolik bağ üzerinden çağrıda proje kökünü çözecek ve `waybar`/`status`/`calibrate` CLI alt komutlarını Python CLI'ye devredecek şekilde güncellendi.
-- [x] `README.md` (kapsamlı Türkçe + İngilizce özet), MIT `LICENSE` ve `install.sh` (uv Python 3.12 `.venv`, editable kurulum, `~/.local/bin` sembolik bağı) hazırlandı.
-- [x] `tests/test_core.py` eklendi: `models`, `recommender`, `collectors` (geçici SQLite + sahte Antigravity/Copilot verisi) ve `cli` JSON çıktısı; 38 testin tamamı geçiyor.
-- [x] Waybar entegrasyonu tamamlandı: `~/.config/waybar/config.jsonc` içinde `custom/ai-quota` `modules-right` başına eklendi; `style.css` ortak hap seçicisi ve `normal/active/warning/critical/conflict` Catppuccin Mocha sınıfları eklendi.
-- [x] `~/.local/bin/waybar-ai-quota` -> `~/waybar-ai-quota/bin/waybar-ai-quota` sembolik bağı oluşturuldu; Waybar `SIGUSR2` ile yeniden yüklendi ve modül komutu JSON üretti.
+- [x] v0.1.0 git etiketi (`v0.1.0` -> `748461f`) oluşturuldu.
+- [x] **Sprint 0:** `cloudcode-pa` / Google OAuth scraping kodu tamamen kaldırıldı; `SPEC.md`, `PLAN.md`, `pyproject.toml`, `config.example.toml` v2 (`agent-notifier 0.2.0`) olarak güncellendi; normalize FSM + `SessionNode` ağaç + `events.py` + `HarnessAdapter`/`ProviderAdapter` kontratları yazıldı.
+- [x] **Sprint 1 (MVP):**
+  - OpenCode harness adaptörü (`opencode.db` `mode=ro`, `parent_id` ana/subagent ağacı + eski şema fallback + push birleştirme).
+  - Antigravity (`agy`) pasif hook adaptörü (sıfır OAuth, sıfır ağ çağrısı).
+  - OpenCode Go hibrit sağlayıcısı (resmî `/zen/go/v1/usage` + gizlilik-temiz önbellek + yerel DB fallback) ve opt-in GitHub Copilot sağlayıcısı.
+  - Saf `Gio.DBus` SNI Tray + `dbusmenu` + 6 durumlu dinamik SVG/ARGB32 ikon seti + modüler GTK4/Adw Dashboard (ağaç görünümü, opt-in kota kartları, `⚙` ayarlar çekmecesi).
+  - Waybar / Polybar / Swaybar / Tmux / Plain / JSON formatlayıcıları.
+  - `./install.sh`, `bin/agent-notifier` (+ `waybar-ai-quota` uyumluluk sarmalayıcısı), `setup`, `doctor`, `.bak` yedekli `hooks print|install|uninstall`, `uninstall`, güncel `README.md`.
+  - 13 yalıtılmış birim testi (`tests/test_core.py`, `tests/test_hooks_cli.py`) ve CLI/GTK4 import duman testleri geçti.
 
 ## Sonraki Adım
-- GitHub Student Developer Pack onaylandığında `gh api /copilot_internal/user` otomatik olarak `Copilot Student` planına geçecek; ek yapılandırma gerekmez.
+1. Canlı Sway masaüstünde `./install.sh && agent-notifier doctor && agent-notifier setup && agent-notifier tray` ile canlı doğrulama yapmak (ve istenirse GitHub'da repo adını `agent-notifier` yapıp push etmek).
+2. Canlı geri bildirim sonrası **Sprint 2**: Claude Code (`.jsonl` + `/statusline` pasif kota) + Codex CLI + OpenRouter + Yerel USD bütçe sağlayıcısı.
 
 ## Bilinen Sorunlar
-- Fedora 43'te `python3-gobject` (`gi`) sistem Python 3.14 altında hazır kurulu, `gtk4-devel` / `gobject-introspection-devel` ise kurulu değil. Çözüm: Çekirdek paket ve testler `uv` Python 3.12 `.venv` ile çalışırken, GTK4 UI başlatıcısı `.venv` içinde `gi` bulamazsa otomatik olarak sistem `/usr/bin/python3` GObject bağlamını kullanarak sıfır derleme sorunuyla çalışıyor.
-- `Adw.ApplicationWindow` başlatılırken GtkSettings kaynaklı `gtk-application-prefer-dark-theme` uyarısı stderr'e düşebilir; işlevsel etkisi yoktur (tema `Adw.StyleManager.FORCE_DARK` ile ayarlanıyor).
+- Mevcut `.venv` eski proje yolunu işaret ettiği için canlı ortamda `./install.sh` (veya `rm -rf .venv && uv venv --python 3.12 .venv && uv pip install -e .`) ile yenilenmelidir.
+- GNOME üzerinde System Tray ikonu için AppIndicator eklentisinin etkin olması gerekir (`agent-notifier doctor` bunu kullanıcıya bildirir).

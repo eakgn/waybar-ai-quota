@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# agent-notifier başlatıcısı
+#
+# - `tray`, `dashboard`, `ui` (veya argümansız çağrı): GTK4/PyGObject içeren
+#   Python yorumlayıcısını otomatik seçer (Fedora/Arch/Ubuntu sistem Python'u
+#   veya .venv).
+# - Diğer tüm CLI alt komutları (`status`, `bar`, `event`, `hooks`, `setup`,
+#   `doctor`, `ack`, `uninstall`): hızlı `.venv` Python 3.12 veya sistem Python'u.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    SOURCE_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+    SOURCE="$(readlink -- "$SOURCE")"
+    [[ "$SOURCE" == /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+ROOT_DIR="$(cd -P -- "$SCRIPT_DIR/.." && pwd)"
+
+export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+
+CMD="${1:-tray}"
+case "$CMD" in
+    tray|dashboard|ui)
+        PYTHON_BIN=""
+        CANDIDATES=()
+        [[ -n "${AGENT_NOTIFIER_PYTHON:-}" ]] && CANDIDATES+=("$AGENT_NOTIFIER_PYTHON")
+        [[ -x "$ROOT_DIR/.venv/bin/python" ]] && CANDIDATES+=("$ROOT_DIR/.venv/bin/python")
+        CANDIDATES+=("/usr/bin/python3")
+        for cand in "${CANDIDATES[@]}"; do
+            [[ -x "$cand" ]] || continue
+            if "$cand" -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")' >/dev/null 2>&1; then
+                PYTHON_BIN="$cand"
+                break
+            fi
+        done
+        if [[ -z "$PYTHON_BIN" ]]; then
+            echo "agent-notifier: GTK4/PyGObject bulunan Python bulunamadı. 'agent-notifier doctor' çalıştırın." >&2
+            exit 1
+        fi
+        exec "$PYTHON_BIN" -m agent_notifier.cli "$@"
+        ;;
+    *)
+        CLI_PYTHON="$ROOT_DIR/.venv/bin/python"
+        if [[ ! -x "$CLI_PYTHON" ]]; then
+            CLI_PYTHON="$(command -v python3 || true)"
+        fi
+        if [[ -z "$CLI_PYTHON" ]]; then
+            echo "agent-notifier: python3 bulunamadı." >&2
+            exit 1
+        fi
+        exec "$CLI_PYTHON" -m agent_notifier.cli "$@"
+        ;;
+esac

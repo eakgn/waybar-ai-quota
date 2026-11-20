@@ -3,32 +3,38 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "waybar-ai-quota"
-version = "0.1.0"
-description = "Waybar eklentisi ve GTK4 panel: OpenCode Go, Antigravity ve GitHub Copilot kota takibi"
+name = "agent-notifier"
+version = "0.2.0"
+description = "Linux system tray & dashboard monitor for AI coding agent sessions, subagents, and opt-in provider quotas"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
-keywords = ["waybar", "quota", "opencode", "antigravity", "copilot", "sway"]
+keywords = ["ai", "agent", "notifier", "tray", "waybar", "gtk4", "opencode", "antigravity", "quota"]
 license = { text = "MIT" }
-authors = [{ name = "waybar-ai-quota contributors" }]
+authors = [{ name = "agent-notifier contributors" }]
 classifiers = [
   "Environment :: Console",
-  "Intended Audience :: End Users/Desktop",
+  "Environment :: X11 Applications :: GTK",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3.12",
   "Topic :: Utilities",
 ]
 
 [project.scripts]
-waybar-ai-quota = "waybar_ai_quota.cli:main"
+agent-notifier = "agent_notifier.cli:main"
+waybar-ai-quota = "agent_notifier.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/eakgn/waybar-ai-quota"
+Homepage = "https://github.com/eakgn/agent-notifier"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/waybar_ai_quota"]
+packages = ["src/agent_notifier"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-  "src/waybar_ai_quota",
+  "src/agent_notifier",
   "config.example.toml",
+  "bin/agent-notifier",
+  "install.sh",
 ]

@@ -1,13 +1,17 @@
-"""OpenCode Go kota sağlayıcısı (hibrit: resmî API + yerel opencode.db fallback).
+"""OpenCode Go kota sağlayıcısı (yalnız gerçek resmî API — sıfır sahte tahmin).
 
-Resmî uç (OPENCODE_QUOTA_API_NOTES.md):
+Resmî uç (`OPENCODE_QUOTA_API_NOTES.md`):
   GET https://opencode.ai/zen/go/v1/usage
   Headers: Authorization: Bearer <token>, x-opencode-org-id: <workspaceID>
 
-Gizlilik:
-- Kimlik bilgisi yalnız bellek içinde `opencode.db` salt-okunur sorgulanarak okunur;
-  asla önbelleğe, loglara veya çıktı modellerine yazılmaz.
-- Ağ/kimlik başarısız olursa sessizce yerel `opencode.db` harcama hesabına düşer.
+İlkeler (Red-Team R2):
+- Yerel `opencode.db` harcaması sunucu penceresi (`resetsAt`) ve dinamik plan
+  limitleriyle birebir örtüşmediği için kota yüzdesi uydurmakta KULLANILMAZ.
+- Canlı API başarılıysa gerçek yüzdeler (`rolling`, `weekly`, `monthly`) gösterilir.
+- Geçici API kesintisinde son 30 dk içindeki gerçek API önbelleği açıkça
+  "bayat önbellek" notuyla sunulur; taze önbellek yoksa açıkça "Canlı API hatası"
+  bildirilir.
+- Token, e-posta ve orgID asla loga, önbelleğe veya çıktıya yazılmaz.
 """
 
 from __future__ import annotations
@@ -21,64 +25,18 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .. import config as cfg_mod
-from ..models import ProviderQuota, QuotaPool, QuotaWindow
+from ..models import ProviderQuota, QuotaWindow
 from ..utils import clamp_pct, format_duration_tr, iso_now, iso_to_ts, now_ms, opencode_db_path, ro_connect
 from .base import AdapterInfo
 
 GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
-
-WINDOWS_MS: dict[str, int] = {
-    "rolling": 5 * 3600 * 1000,
-    "weekly": 7 * 24 * 3600 * 1000,
-    "monthly": 30 * 24 * 3600 * 1000,
-}
+MAX_STALE_CACHE_SECONDS = 1800  # 30 dk'dan eski önbellek gerçek veri gibi sunulmaz
 
 WINDOW_LABELS: dict[str, str] = {
     "rolling": "5 Saatlik",
     "weekly": "Haftalık",
     "monthly": "Aylık",
 }
-
-GO_POOLS: tuple[dict[str, Any], ...] = (
-    {
-        "key": "flash",
-        "label": "DeepSeek V4.1 Flash",
-        "models": ("deepseek-v4.1-flash",),
-        "limits": {"rolling": 20.0, "weekly": 50.0, "monthly": 100.0},
-    },
-    {
-        "key": "mid",
-        "label": "GLM 5.3 / Kimi Code",
-        "models": ("glm-5.3-flash", "kimi-k2.7-code"),
-        "limits": {"rolling": 12.0, "weekly": 30.0, "monthly": 60.0},
-    },
-    {
-        "key": "argon",
-        "label": "Gemini 4 Argon",
-        "models": ("gemini-4-argon",),
-        "limits": {"rolling": 6.0, "weekly": 15.0, "monthly": 30.0},
-    },
-    {
-        "key": "premium",
-        "label": "Pro / Premium ($15)",
-        "models": ("deepseek-v4-pro", "claude-haiku-5.5", "gpt-6-luna", "grok-4.7", "kimi-k3"),
-        "limits": {"rolling": 3.0, "weekly": 7.5, "monthly": 15.0},
-    },
-)
-
-_POOL_INDEX: dict[str, dict[str, Any]] = {}
-for _p in GO_POOLS:
-    for _m in _p["models"]:
-        _POOL_INDEX[_m] = _p
-_MATCH_ORDER = sorted(_POOL_INDEX, key=len, reverse=True)
-
-
-def _pool_for_model(model_id: str) -> dict[str, Any] | None:
-    normalized = (model_id or "").split("#", 1)[0].strip().lower()
-    for candidate in _MATCH_ORDER:
-        if normalized == candidate or normalized.startswith(candidate + "-"):
-            return _POOL_INDEX[candidate]
-    return None
 
 
 def _extract_token_from_value(raw_val: Any) -> str | None:
@@ -108,8 +66,6 @@ def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
     - `credential` (`integration_id`/`connector_id`/`label`, `value`, `active`)
     - `control_account` (`access_token`, `active`, `time_updated`)
     - `workspace` (`id`, `provider`, `last_used_at`)
-
-    Token, e-posta ve orgID asla loga, önbelleğe veya çıktıya yazılmaz.
     """
     if not db_path.is_file():
         return None, None
@@ -125,14 +81,16 @@ def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
             for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
 
-        # 1. Öncelik: `credential` tablosunda opencode-go / opencode kaydı (active öncelikli)
         if "credential" in tables:
             cols = {
                 str(r["name"]) for r in con.execute("PRAGMA table_info(credential)").fetchall()
             }
-            order = "ORDER BY COALESCE(active, 0) DESC, time_updated DESC" if "active" in cols and "time_updated" in cols else ""
+            order = (
+                "ORDER BY COALESCE(active, 0) DESC, time_updated DESC"
+                if "active" in cols and "time_updated" in cols
+                else ""
+            )
             rows = con.execute(f"SELECT * FROM credential {order}").fetchall()
-            # Önce açıkça `opencode-go`, sonra genel `opencode`
             for needle in ("opencode-go", "opencode"):
                 for row in rows:
                     row_cols = row.keys()
@@ -154,7 +112,6 @@ def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
                 if token:
                     break
 
-        # 2. Yedek: `control_account` tablosunda aktif OAuth access_token
         if not token and "control_account" in tables:
             cols = {
                 str(r["name"])
@@ -171,7 +128,6 @@ def _read_go_credentials(db_path: Path) -> tuple[str | None, str | None]:
                     if cand:
                         token = cand
 
-        # 3. `workspace` tablosundan en son kullanılan org/workspace kimliği
         if "workspace" in tables:
             cols = {
                 str(r["name"]) for r in con.execute("PRAGMA table_info(workspace)").fetchall()
@@ -196,7 +152,7 @@ def _fetch_live_usage(db_path: Path, timeout: float) -> tuple[dict[str, Any] | N
     """Resmî `/zen/go/v1/usage` çağrısı yapar; yalnız temiz yüzdeleri döndürür."""
     token, org_id = _read_go_credentials(db_path)
     if not token:
-        return None, None
+        return None, "Canlı API hatası (OpenCode Go kimlik bilgisi bulunamadı)"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -209,20 +165,22 @@ def _fetch_live_usage(db_path: Path, timeout: float) -> tuple[dict[str, Any] | N
         with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - sabit resmî https ucu
             raw = resp.read()
     except HTTPError as exc:
+        if exc.code == 401:
+            return None, "Canlı API hatası (HTTP 401 — oturum/token yenilenmeli)"
         if exc.code == 403:
-            return None, "Go aboneliği etkin değil (HTTP 403)"
-        return None, f"Go API HTTP {exc.code}"
+            return None, "Canlı API hatası (HTTP 403 — Go aboneliği yok veya erişim reddedildi)"
+        return None, f"Canlı API hatası (HTTP {exc.code})"
     except (URLError, TimeoutError, OSError):
-        return None, "Go API ağ hatası"
+        return None, "Canlı API hatası (ağ erişilemiyor)"
 
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        return None, "Go API geçersiz JSON"
+        return None, "Canlı API hatası (geçersiz JSON)"
 
     usage = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(usage, dict):
-        return None, "Go API beklenmeyen biçim"
+        return None, "Canlı API hatası (beklenmeyen yanıt biçimi)"
 
     sanitized: dict[str, dict[str, Any]] = {}
     for key in ("rolling", "weekly", "monthly"):
@@ -240,32 +198,28 @@ def _fetch_live_usage(db_path: Path, timeout: float) -> tuple[dict[str, Any] | N
             "remaining_pct": rem_pct,
             "resets_at": entry.get("resetsAt") or entry.get("resetAt"),
         }
-    return sanitized if sanitized else None, None
+    return (sanitized, None) if sanitized else (None, "Canlı API hatası (boş kullanım verisi)")
 
 
-def _local_go_spend(db_path: Path) -> tuple[dict[str, dict[str, float]], dict[str, float], str | None]:
-    now = now_ms()
-    starts = {k: now - span for k, span in WINDOWS_MS.items()}
-    month_start = starts["monthly"]
-    pool_spend = {p["key"]: {k: 0.0 for k in WINDOWS_MS} for p in GO_POOLS}
-    total_spend = {k: 0.0 for k in WINDOWS_MS}
-
+def _local_5h_spend_usd(db_path: Path) -> float | None:
+    """Bilgilendirme amaçlı son 5 saatlik yerel `opencode-go` harcaması (yüzde üretmez)."""
+    if not db_path.is_file():
+        return None
+    since = now_ms() - 5 * 3600 * 1000
     try:
         con = ro_connect(db_path)
-    except sqlite3.Error as exc:
-        return pool_spend, total_spend, f"opencode.db açılamadı: {exc}"
-
-    message_costs: dict[str, float] = {}
+    except sqlite3.Error:
+        return None
+    total = 0.0
     try:
         rows = con.execute(
             """
-            SELECT session_id, time_created, data
-            FROM session_message
+            SELECT data FROM session_message
             WHERE type = 'assistant' AND time_created >= ?
             ORDER BY time_created DESC
-            LIMIT 20000
+            LIMIT 5000
             """,
-            (month_start,),
+            (since,),
         ).fetchall()
         for row in rows:
             try:
@@ -275,55 +229,15 @@ def _local_go_spend(db_path: Path) -> tuple[dict[str, dict[str, float]], dict[st
             if not isinstance(data, dict):
                 continue
             model = data.get("model") or {}
-            if not isinstance(model, dict) or str(model.get("providerID") or "") != "opencode-go":
-                continue
-            cost = data.get("cost")
-            if not isinstance(cost, (int, float)) or float(cost) <= 0:
-                continue
-            cost_f = float(cost)
-            pool = _pool_for_model(str(model.get("id") or ""))
-            created = int(row["time_created"] or 0)
-            message_costs[row["session_id"]] = message_costs.get(row["session_id"], 0.0) + cost_f
-            for key, start in starts.items():
-                if created >= start:
-                    total_spend[key] += cost_f
-                    if pool:
-                        pool_spend[pool["key"]][key] += cost_f
-
-        sessions = con.execute(
-            "SELECT id, model, cost, time_updated FROM session_v2 WHERE time_updated >= ? AND cost > 0",
-            (month_start,),
-        ).fetchall()
-    except sqlite3.Error as exc:
+            if isinstance(model, dict) and str(model.get("providerID") or "") == "opencode-go":
+                cost = data.get("cost")
+                if isinstance(cost, (int, float)) and float(cost) > 0:
+                    total += float(cost)
+    except sqlite3.Error:
+        return None
+    finally:
         con.close()
-        return pool_spend, total_spend, f"Go harcaması okunamadı: {exc}"
-    con.close()
-
-    for session in sessions:
-        residual = float(session["cost"] or 0.0) - message_costs.get(session["id"], 0.0)
-        if residual <= 0:
-            continue
-        raw_model = session["model"]
-        prov, mod = "", ""
-        if isinstance(raw_model, str):
-            try:
-                parsed = json.loads(raw_model)
-                if isinstance(parsed, dict):
-                    prov = str(parsed.get("providerID") or parsed.get("provider") or "")
-                    mod = str(parsed.get("id") or parsed.get("modelID") or "")
-            except ValueError:
-                pass
-        if prov != "opencode-go":
-            continue
-        pool = _pool_for_model(mod)
-        updated = int(session["time_updated"] or 0)
-        for key, start in starts.items():
-            if updated >= start:
-                total_spend[key] += residual
-                if pool:
-                    pool_spend[pool["key"]][key] += residual
-
-    return pool_spend, total_spend, None
+    return round(total, 4)
 
 
 def _load_api_cache() -> dict[str, Any] | None:
@@ -343,7 +257,7 @@ class OpenCodeGoProviderAdapter:
     info = AdapterInfo(
         key="opencode_go",
         label="OpenCode Go",
-        description="OpenCode Go resmî kota API (/zen/go/v1/usage) + yerel DB havuz kırılımı",
+        description="OpenCode Go resmî canlı kota API (/zen/go/v1/usage)",
     )
 
     def detect(self) -> bool:
@@ -355,27 +269,29 @@ class OpenCodeGoProviderAdapter:
         config: dict[str, Any],
         force_refresh: bool = False,
         offline: bool = False,
+        ttl_override: int | None = None,
     ) -> ProviderQuota:
         critical_pct = float(cfg_mod.get(config, "thresholds.critical_pct", 15))
-        ttl = int(cfg_mod.get(config, "refresh.opencode_go_cache_seconds", 600))
+        default_ttl = int(cfg_mod.get(config, "refresh.opencode_go_cache_seconds", 600))
+        ttl = int(ttl_override) if ttl_override is not None else default_ttl
         live_enabled = bool(cfg_mod.get(config, "cloud.opencode_go_live_api", True))
         timeout = float(cfg_mod.get(config, "cloud.timeout_seconds", 10))
         db_path = opencode_db_path()
         now = time.time()
 
-        # 1. Resmî canlı API (önbellekli)
         api_data: dict[str, Any] | None = None
         api_fetched_ts: float | None = None
         api_cached = False
         api_error: str | None = None
 
         cached = _load_api_cache()
-        if cached:
-            fetched_ts = float(cached.get("fetched_at") or 0)
-            if (now - fetched_ts) <= ttl and not force_refresh:
-                api_data = cached["data"]
-                api_fetched_ts = fetched_ts
-                api_cached = True
+        cache_ts = float(cached.get("fetched_at") or 0) if cached else 0.0
+        cache_age = (now - cache_ts) if cached else float("inf")
+
+        if cached and cache_age <= ttl and not force_refresh:
+            api_data = cached["data"]
+            api_fetched_ts = cache_ts
+            api_cached = True
 
         if api_data is None and live_enabled and not offline and db_path.is_file():
             live, err = _fetch_live_usage(db_path, timeout)
@@ -393,102 +309,54 @@ class OpenCodeGoProviderAdapter:
                     pass
             else:
                 api_error = err
-                if cached:
+                # Yalnız yakın tarihli (<= 30 dk) gerçek API önbelleğini bayat etiketiyle kullan
+                if cached and cache_age <= MAX_STALE_CACHE_SECONDS:
                     api_data = cached["data"]
-                    api_fetched_ts = float(cached.get("fetched_at") or 0)
+                    api_fetched_ts = cache_ts
                     api_cached = True
-        elif api_data is None and cached:
-            api_data = cached["data"]
-            api_fetched_ts = float(cached.get("fetched_at") or 0)
-            api_cached = True
+        elif api_data is None and offline:
+            if cached and cache_age <= MAX_STALE_CACHE_SECONDS:
+                api_data = cached["data"]
+                api_fetched_ts = cache_ts
+                api_cached = True
+            else:
+                api_error = "Canlı API hatası (güncel önbellek yok)"
+        elif api_data is None and not db_path.is_file():
+            api_error = "Canlı API hatası (opencode.db bulunamadı)"
+        elif api_data is None and not live_enabled:
+            api_error = "Canlı API kapalı (`cloud.opencode_go_live_api = false`)"
 
-        # 2. Yerel opencode.db havuz kırılımı & offline fallback
-        pools: list[QuotaPool] = []
-        local_windows: list[QuotaWindow] = []
-        local_error: str | None = None
+        local_5h = _local_5h_spend_usd(db_path)
 
-        if db_path.is_file():
-            pool_spend, total_spend, local_error = _local_go_spend(db_path)
-            if not local_error:
-                for p in GO_POOLS:
-                    w_list: list[QuotaWindow] = []
-                    rem_values: list[float] = []
-                    for w_key, limit in p["limits"].items():
-                        spent = round(pool_spend[p["key"]][w_key], 4)
-                        pct = clamp_pct((limit - spent) / limit * 100.0) if limit > 0 else 0.0
-                        rem_values.append(pct)
-                        w_list.append(
-                            QuotaWindow(
-                                key=w_key,
-                                label=WINDOW_LABELS[w_key],
-                                remaining_pct=pct,
-                                used_pct=clamp_pct(100.0 - pct),
-                                spent_usd=spent,
-                                limit_usd=limit,
-                            )
-                        )
-                    pool_pct = min(rem_values) if rem_values else 100.0
-                    pools.append(
-                        QuotaPool(
-                            key=p["key"],
-                            label=p["label"],
-                            remaining_pct=pool_pct,
-                            critical=pool_pct < critical_pct,
-                            detail=f"5s ${pool_spend[p['key']]['rolling']:.2f}/${p['limits']['rolling']:.0f}",
-                            windows=w_list,
-                        )
-                    )
-
-                for w_key in ("rolling", "weekly", "monthly"):
-                    total_limit = sum(p["limits"][w_key] for p in GO_POOLS)
-                    spent = round(total_spend[w_key], 4)
-                    pct = clamp_pct((total_limit - spent) / total_limit * 100.0) if total_limit > 0 else 0.0
-                    local_windows.append(
-                        QuotaWindow(
-                            key=w_key,
-                            label=WINDOW_LABELS[w_key],
-                            remaining_pct=pct,
-                            used_pct=clamp_pct(100.0 - pct),
-                            spent_usd=spent,
-                            limit_usd=round(total_limit, 2),
-                        )
-                    )
-        else:
-            local_error = "opencode.db bulunamadı"
-
-        # 3. Canlı API pencerelerini önceliklendir, yoksa yerel pencereleri kullan
-        windows: list[QuotaWindow] = []
-        if api_data:
-            for w_key in ("rolling", "weekly", "monthly"):
-                entry = api_data.get(w_key)
-                if not isinstance(entry, dict):
-                    continue
-                resets_at = entry.get("resets_at")
-                reset_ts = iso_to_ts(resets_at)
-                reset_in = max(0, int(reset_ts - now)) if reset_ts else None
-                windows.append(
-                    QuotaWindow(
-                        key=w_key,
-                        label=WINDOW_LABELS[w_key],
-                        remaining_pct=entry.get("remaining_pct"),
-                        used_pct=entry.get("used_pct"),
-                        rate_limited=bool(entry.get("rate_limited")),
-                        reset_at=str(resets_at) if resets_at else None,
-                        reset_in_seconds=reset_in,
-                        reset_human=format_duration_tr(reset_in),
-                    )
-                )
-            source = "hybrid" if pools else "api"
-        else:
-            windows = local_windows
-            source = "local"
-
-        if not windows and not pools:
+        if not api_data:
             return ProviderQuota(
                 key=self.info.key,
                 label=self.info.label,
                 available=False,
-                error=api_error or local_error or "OpenCode Go verisi yok",
+                source="unavailable",
+                local_spend_5h_usd=local_5h,
+                error=api_error or "Canlı API hatası",
+            )
+
+        windows: list[QuotaWindow] = []
+        for w_key in ("rolling", "weekly", "monthly"):
+            entry = api_data.get(w_key)
+            if not isinstance(entry, dict):
+                continue
+            resets_at = entry.get("resets_at")
+            reset_ts = iso_to_ts(resets_at)
+            reset_in = max(0, int(reset_ts - now)) if reset_ts else None
+            windows.append(
+                QuotaWindow(
+                    key=w_key,
+                    label=WINDOW_LABELS[w_key],
+                    remaining_pct=entry.get("remaining_pct"),
+                    used_pct=entry.get("used_pct"),
+                    rate_limited=bool(entry.get("rate_limited")),
+                    reset_at=str(resets_at) if resets_at else None,
+                    reset_in_seconds=reset_in,
+                    reset_human=format_duration_tr(reset_in),
+                )
             )
 
         known_pcts = [
@@ -499,21 +367,27 @@ class OpenCodeGoProviderAdapter:
         headline = min(known_pcts) if known_pcts else None
         any_limited = any(w.rate_limited for w in windows)
         earliest_reset = next((w.reset_human for w in windows if w.reset_human), None)
+        age_sec = max(0, int(now - api_fetched_ts)) if api_fetched_ts else 0
+
+        plan_note = "Go Planı"
+        if api_error and api_cached:
+            plan_note = f"Go Planı (Bayat · {format_duration_tr(age_sec) or '—'})"
 
         return ProviderQuota(
             key=self.info.key,
             label=self.info.label,
             available=True,
-            plan_label="Go Planı" + (" (Canlı API)" if api_data else " (Yerel DB)"),
+            plan_label=plan_note,
             headline_pct=headline,
             critical=bool(any_limited or (headline is not None and headline < critical_pct)),
             rate_limited=any_limited,
-            source=source,
+            source="cache" if api_cached else "api",
             reset_human=earliest_reset,
+            local_spend_5h_usd=local_5h,
             fetched_at=iso_now(api_fetched_ts) if api_fetched_ts else iso_now(now),
-            age_seconds=max(0, int(now - api_fetched_ts)) if api_fetched_ts else 0,
+            age_seconds=age_sec,
             cached=api_cached,
-            pools=pools,
+            pools=[],
             windows=windows,
-            error=api_error if not api_data else None,
+            error=api_error,
         )

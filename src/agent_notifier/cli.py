@@ -111,6 +111,28 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return _launch_gui(tray_mode=False, config=cfg_mod.load_config(), action=action)
 
 
+def _print_status_summary(snap: Any) -> None:
+    print(f"agent-notifier · {snap.global_label} (aktif:{snap.active_count} bekleyen:{snap.waiting_count} bitti:{snap.done_unseen_count})")
+    if snap.sessions:
+        print("\nOturumlar (son 24s):")
+        for s in snap.sessions[:8]:
+            who = s.project or s.title or s.id[:8]
+            sub = f" (+{len(s.children)} alt)" if s.children else ""
+            print(f"  - [{s.effective_state.value}] {who} ({s.harness}{sub})")
+    else:
+        print("\nOturumlar: son 24 saatte kayıt yok")
+    if snap.providers:
+        print("\nSeçili Kotalar:")
+        for p in snap.providers:
+            if not p.available:
+                print(f"  - {p.label}: {p.error or 'Canlı API hatası'}")
+            elif p.all_unlimited:
+                print(f"  - {p.label}: Sınırsız ({p.plan_label or ''})")
+            else:
+                pct = "KİLİTLİ" if p.rate_limited else (f"%{p.headline_pct:.0f}" if p.headline_pct is not None else "—")
+                print(f"  - {p.label}: {pct} [{p.source}]" + (f" · sıfırlanma {p.reset_human}" if p.reset_human else ""))
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     cfg = cfg_mod.load_config()
     state = cfg_mod.load_state()
@@ -119,10 +141,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         state=state,
         force_refresh=bool(args.refresh),
         offline=bool(args.offline),
+        include_all=bool(getattr(args, "all", False)),
     )
     if not args.no_notify:
         snap.notifications_sent = notifier.maybe_notify(snap, config=cfg, state=state)
-    print(formatters.format_json(snap))
+    if getattr(args, "summary", False):
+        _print_status_summary(snap)
+    else:
+        print(formatters.format_json(snap))
     return 0
 
 
@@ -314,10 +340,12 @@ def build_parser() -> argparse.ArgumentParser:
         p_dash.add_argument("-c", "--close", action="store_true", help="Açık Dashboard penceresini kapat")
         p_dash.set_defaults(func=cmd_dashboard)
 
-    p_status = sub.add_parser("status", help="Tam normalize durumu JSON olarak yazdır")
+    p_status = sub.add_parser("status", help="Normalize durumu yazdır (varsayılan: son 24s JSON)")
     p_status.add_argument("-r", "--refresh", action="store_true", help="Uzak kota API önbelleğini yenile")
     p_status.add_argument("--offline", action="store_true", help="Hiçbir ağ çağrısı yapma")
     p_status.add_argument("--no-notify", action="store_true", help="Masaüstü bildirimi gönderme")
+    p_status.add_argument("--summary", "-s", action="store_true", help="Kısa insan-okunur özet yazdır")
+    p_status.add_argument("--all", action="store_true", help="24 saatten eski oturumları da dahil et")
     p_status.set_defaults(func=cmd_status)
 
     p_bar = sub.add_parser("bar", help="WM barları için tek satır çıktı üret")

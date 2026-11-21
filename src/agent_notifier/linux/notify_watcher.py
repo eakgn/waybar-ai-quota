@@ -4,14 +4,19 @@ Antigravity (`agy` / Antigravity App) gibi izin isteği için ayrı hook olayı
 sunmayan istemciler, kullanıcıdan komut/izin onayı isterken Linux masaüstüne
 `org.freedesktop.Notifications.Notify` çağrısı gönderir.
 
-Bu modül, ana SNI bağlantısından tamamen ayrı bir salt-izleme (`BecomeMonitor`)
-D-Bus bağlantısı açar; yalnızca `Notify` çağrılarını dinler (%0 CPU, sıfır
-gecikme, ToS-güvenli). Kendi bildirimlerini (`agent-notifier`) yok sayar.
+İlkeler (Red-Team R4 — Sıfır Varsayım / Sıfır Yanlış Alarm):
+- Ayrı bir salt-izleme (`BecomeMonitor`) D-Bus bağlantısı açar (%0 CPU, ToS-güvenli).
+- Yalnız açık izin/soru, hata veya bitiş sinyali taşıyan bildirimleri sınıflar;
+  eşleşmeyen genel bildirimleri ("Güncelleme var" vb.) YOK SAYAR (`None`).
+- Çoklu oturumda yanlış oturuma yapıştırmaz: tek aktif oturum varsa ona, birden
+  fazlaysa proje adı eşleşene, yine belirsizse geçici `antigravity-prompt`
+  düğümüne yazar (gerçek oturumun bir sonraki hook olayıyla otomatik temizlenir).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Callable
 
 from .. import events as events_mod
@@ -39,6 +44,8 @@ _WAITING_WORDS = (
     "review",
     "action required",
     "needs your",
+    "run command",
+    "bypass",
     "izin",
     "onay",
     "soru",
@@ -53,7 +60,7 @@ def classify_desktop_notification(
     *,
     own_app_name: str = "agent-notifier",
 ) -> tuple[str, SessionState, str] | None:
-    """Bir masaüstü bildirimini (harness, durum, mesaj) üçlüsüne eşler; ilgisizse None."""
+    """Bir masaüstü bildirimini (harness, durum, mesaj) üçlüsüne eşler; belirsizse None."""
     app_low = (app_name or "").strip().lower()
     if not app_low and not summary:
         return None
@@ -77,9 +84,8 @@ def classify_desktop_notification(
     elif any(w in text_low for w in _DONE_WORDS):
         state = SessionState.DONE_UNSEEN
     else:
-        # Antigravity varsayılan olarak dikkat/izin bildirimleri gönderdiği için
-        # açıkça done/error olmayan eşleşen bildirimleri waiting_input say.
-        state = SessionState.WAITING_INPUT
+        # Belirsiz genel bildirimleri (güncelleme, bilgi vb.) yanlışlıkla WAITING_INPUT sayma
+        return None
 
     clean_summary = (summary or "").strip()
     clean_body = (body or "").strip()
@@ -87,12 +93,34 @@ def classify_desktop_notification(
     return matched_harness, state, msg[:160]
 
 
-def _resolve_latest_session_id(harness: str) -> str:
-    """O harness için en güncel aktif oturum kimliğini bulur (yoksa varsayılan)."""
-    existing = events_mod.load_events(harness=harness, max_age_seconds=3600)
-    if existing:
+def resolve_target_session_id(harness: str, text: str = "") -> str:
+    """Bildirimi yanlış oturuma yapıştırmadan en doğru hedef oturumu seçer."""
+    existing = [
+        ev
+        for ev in events_mod.load_events(harness=harness, max_age_seconds=3600)
+        if ev.session_id != f"{harness}-prompt"
+    ]
+    active = [
+        ev for ev in existing if ev.state in (SessionState.RUNNING, SessionState.WAITING_INPUT)
+    ]
+
+    if len(active) == 1:
+        return active[0].session_id
+
+    text_low = (text or "").lower()
+    if len(active) > 1 and text_low:
+        matched = [ev for ev in active if ev.project and ev.project.lower() in text_low]
+        if len(matched) == 1:
+            return matched[0].session_id
+        # Birden fazla paralel oturum varken hangisi olduğu belirsiz: geçici prompt düğümü
+        return f"{harness}-prompt"
+
+    if len(active) > 1:
+        return f"{harness}-prompt"
+
+    if existing and (existing[0].ts > 0):
         return existing[0].session_id
-    return f"{harness}-default"
+    return f"{harness}-prompt"
 
 
 class DesktopNotificationWatcher:
@@ -106,6 +134,7 @@ class DesktopNotificationWatcher:
         self._on_event = on_event
         self._conn: object | None = None
         self._filter_id = 0
+        self._debug = os.environ.get("AGENT_NOTIFIER_DEBUG_NOTIFY", "").strip() in ("1", "true", "yes")
 
     def start(self) -> bool:
         Gio, GLib = self._Gio, self._GLib
@@ -130,8 +159,6 @@ class DesktopNotificationWatcher:
                 2000,
                 None,
             )
-            # Filtreyi BecomeMonitor yanıtı alındıktan SONRA ekle; gelen tüm
-            # izleme mesajları None döndürülerek tüketilir (yanıt gönderilmez).
             self._filter_id = conn.add_filter(self._on_dbus_message)
             self._conn = conn
             return True
@@ -166,10 +193,14 @@ class DesktopNotificationWatcher:
                         app_name = str(unpacked[0] or "")
                         summary = str(unpacked[3] or "")
                         body = str(unpacked[4] or "")
+                        if self._debug:
+                            logger.warning(
+                                "DEBUG_NOTIFY app=%r summary=%r body=%r", app_name, summary, body[:120]
+                            )
                         classified = classify_desktop_notification(app_name, summary, body)
                         if classified is not None:
                             harness, state, msg = classified
-                            sid = _resolve_latest_session_id(harness)
+                            sid = resolve_target_session_id(harness, f"{summary} {body}")
                             events_mod.record_event(
                                 harness=harness,
                                 session_id=sid,
@@ -180,8 +211,7 @@ class DesktopNotificationWatcher:
                                 self._GLib.idle_add(self._fire_callback)
         except Exception as exc:
             logger.debug("Bildirim mesajı işlenemedi: %s", exc)
-        # BecomeMonitor bağlantısı yanıt/hata gönderemez; gelen mesajı Gio'ya
-        # dispatch ettirmeden tüketmek için None döndür.
+        # BecomeMonitor bağlantısı yanıt/hata gönderemez; mesajı tüketmek için None döndür.
         return None
 
     def _fire_callback(self) -> bool:

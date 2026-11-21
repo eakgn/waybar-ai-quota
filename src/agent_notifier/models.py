@@ -157,10 +157,12 @@ class ProviderQuota:
     available: bool = False
     plan_label: str | None = None
     headline_pct: float | None = None
+    all_unlimited: bool = False
     critical: bool = False
     rate_limited: bool = False
-    source: str = "local"  # "api" | "hybrid" | "local" | "cache"
+    source: str = "api"  # "api" | "cache" | "unavailable"
     reset_human: str | None = None
+    local_spend_5h_usd: float | None = None
     fetched_at: str | None = None
     age_seconds: int | None = None
     cached: bool = False

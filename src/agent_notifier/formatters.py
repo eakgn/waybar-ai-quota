@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from . import config as cfg_mod
+from .engine import active_provider_keys
 from .models import STATE_LABELS, STATE_SHORT_LABELS, SessionNode, SessionState, Snapshot
 from .utils import format_duration_tr, short_model_name
 
@@ -38,13 +39,32 @@ def _escape_markup(text: str) -> str:
 
 
 def _quota_chunks(snapshot: Snapshot) -> list[str]:
+    """Dinamik bar kota görünürlüğü:
+    - Oturum aktifken: aktif oturumun kullandığı sağlayıcı + kritik eşik altındakiler.
+    - Boştayken: yalnızca kritik eşik altındaki veya kilitli sağlayıcılar.
+    """
+    active_provs = active_provider_keys(snapshot.sessions)
+    is_active = snapshot.active_count > 0 or snapshot.waiting_count > 0
     chunks: list[str] = []
+
     for prov in snapshot.providers:
-        if not prov.available:
-            continue
         short = PROVIDER_SHORT.get(prov.key, prov.label[:3])
+        is_used_now = is_active and prov.key in active_provs
+        is_urgent = prov.rate_limited or prov.critical
+
+        if not (is_used_now or is_urgent):
+            continue
+
+        if not prov.available:
+            if is_used_now:
+                chunks.append(f"{short} API!")
+            continue
         if prov.rate_limited:
             chunks.append(f"{short} KİLİT")
+        elif prov.all_unlimited:
+            # Sınırsız havuzu %100 diye şişirme
+            if is_used_now:
+                chunks.append(f"{short} ∞")
         elif isinstance(prov.headline_pct, (int, float)):
             chunks.append(f"{short} %{int(round(prov.headline_pct))}")
     return chunks

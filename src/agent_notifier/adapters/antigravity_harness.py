@@ -39,6 +39,7 @@ class AntigravityHarnessAdapter:
         config: dict[str, Any],
         state: dict[str, Any],
         push_events: list[EventRecord],
+        include_all: bool = False,
     ) -> tuple[HarnessSummary, list[SessionNode]]:
         summary = HarnessSummary(key=self.info.key, label=self.info.label)
         now = time.time()
@@ -48,8 +49,17 @@ class AntigravityHarnessAdapter:
         if not ag_events:
             return summary, []
 
+        # Çoklu oturumda belirsiz bildirim için açılmış genel `antigravity-prompt` kaydı,
+        # herhangi bir gerçek oturumun daha yeni bir hook olayı geldiğinde düşürülür.
+        latest_real_ts = max(
+            (ev.ts for ev in ag_events if ev.session_id != "antigravity-prompt"),
+            default=0.0,
+        )
+
         nodes_by_id: dict[str, SessionNode] = {}
         for ev in ag_events:
+            if ev.session_id == "antigravity-prompt" and latest_real_ts > ev.ts:
+                continue
             ev_state = ev.state
             if ev_state == SessionState.DONE_UNSEEN and events_mod.is_done_seen(
                 self.info.key, ev.session_id, ev.ts, state

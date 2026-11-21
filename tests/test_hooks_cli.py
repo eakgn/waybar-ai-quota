@@ -220,8 +220,11 @@ class TestCLIAndFormatters(unittest.TestCase):
             state=SessionState.RUNNING,
             effective_state=SessionState.WAITING_INPUT,
             project="demo",
+            provider="opencode-go",
+            model="opencode-go/deepseek-v4.1-flash",
             children=[child],
         )
+        # Aktif oturum opencode-go kullanıyor -> yalnız Go görünmeli, normal GH gizli kalmalı
         snap = Snapshot(
             generated_at="2026-11-21T00:00:00Z",
             generated_ts=1.0,
@@ -231,14 +234,46 @@ class TestCLIAndFormatters(unittest.TestCase):
             active_count=1,
             subagent_count=1,
             sessions=[root],
-            providers=[ProviderQuota(key="opencode_go", label="OpenCode Go", available=True, headline_pct=82.0)],
+            providers=[
+                ProviderQuota(key="opencode_go", label="OpenCode Go", available=True, headline_pct=82.0),
+                ProviderQuota(key="github_copilot", label="GitHub Copilot", available=True, all_unlimited=True),
+            ],
         )
         cfg = cfg_mod.DEFAULT_CONFIG
         wb = json.loads(formatters.render(snap, "waybar", cfg))
         self.assertEqual(wb["class"], "waiting")
         self.assertIn("Bekliyor: demo (+1)", wb["text"])
         self.assertIn("Go %82", wb["text"])
+        self.assertNotIn("GH", wb["text"])
         self.assertIn("explore", wb["tooltip"])
+
+        # Boşta + tüm kotalar normalken bar tertemiz yalnız "● Boşta" olmalı
+        snap_idle_ok = Snapshot(
+            generated_at="2026-11-21T00:00:00Z",
+            generated_ts=1.0,
+            global_state=SessionState.IDLE,
+            global_label="Boşta",
+            providers=[
+                ProviderQuota(key="opencode_go", label="OpenCode Go", available=True, headline_pct=82.0),
+                ProviderQuota(key="github_copilot", label="GitHub Copilot", available=True, all_unlimited=True),
+            ],
+        )
+        wb_idle = json.loads(formatters.render(snap_idle_ok, "waybar", cfg))
+        self.assertEqual(wb_idle["text"], "● Boşta")
+
+        # Boşta ama Go kritik eşik altındaysa (%10) yalnız kritik olan görünmeli
+        snap_idle_crit = Snapshot(
+            generated_at="2026-11-21T00:00:00Z",
+            generated_ts=1.0,
+            global_state=SessionState.IDLE,
+            global_label="Boşta",
+            providers=[
+                ProviderQuota(key="opencode_go", label="OpenCode Go", available=True, headline_pct=10.0, critical=True),
+                ProviderQuota(key="github_copilot", label="GitHub Copilot", available=True, all_unlimited=True),
+            ],
+        )
+        wb_crit = json.loads(formatters.render(snap_idle_crit, "waybar", cfg))
+        self.assertEqual(wb_crit["text"], "● Boşta · Go %10")
 
         pb = formatters.render(snap, "polybar", cfg)
         self.assertIn("%{F#f9e2af}", pb)
@@ -320,6 +355,53 @@ class TestLinuxIconsAndSNI(unittest.TestCase):
         self.assertIsNotNone(res_err)
         assert res_err is not None
         self.assertEqual(res_err[1], SessionState.ERROR)
+
+        # Red-Team R4: Belirsiz genel Antigravity bildirimi sahte WAITING_INPUT OLMAMALI (None)
+        self.assertIsNone(
+            classify_desktop_notification("Antigravity", "Update available", "Version 1.6.0 is ready")
+        )
+
+    def test_notify_watcher_multi_session_resolution_and_prompt_autoclear(self) -> None:
+        import time
+
+        from agent_notifier import engine
+        from agent_notifier.linux.notify_watcher import resolve_target_session_id
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "AGENT_NOTIFIER_STATE_DIR": str(Path(tmp) / "state"),
+                "AGENT_NOTIFIER_CONFIG_DIR": str(Path(tmp) / "cfg"),
+            }
+            now = time.time()
+            with mock.patch.dict(os.environ, env, clear=False):
+                # 2 paralel Antigravity oturumu açık
+                events_mod.record_event(
+                    harness="antigravity", session_id="c1", state="running", project="alpha", ts=now - 10
+                )
+                events_mod.record_event(
+                    harness="antigravity", session_id="c2", state="running", project="beta", ts=now - 9
+                )
+                # Proje adı bildirimde geçiyorsa doğru oturumu bulmalı
+                self.assertEqual(resolve_target_session_id("antigravity", "Allow command in beta?"), "c2")
+                # Belirsizse yanlış oturuma yapıştırmamalı -> antigravity-prompt
+                self.assertEqual(resolve_target_session_id("antigravity", "Permission required"), "antigravity-prompt")
+
+                events_mod.record_event(
+                    harness="antigravity",
+                    session_id="antigravity-prompt",
+                    state="waiting_input",
+                    message="Permission required",
+                    ts=now - 5,
+                )
+                # Gerçek oturum daha yeni bir olay gönderince geçici prompt otomatik düşmeli
+                events_mod.record_event(
+                    harness="antigravity", session_id="c1", state="running", project="alpha", ts=now - 1
+                )
+                cfg = cfg_mod.load_config()
+                cfg["harnesses"] = {"opencode": False, "antigravity": True}
+                cfg["providers"] = {"opencode_go": False, "github_copilot": False}
+                snap = engine.collect_snapshot(config=cfg, offline=True)
+                self.assertNotIn("antigravity-prompt", [s.id for s in snap.sessions])
 
 
 if __name__ == "__main__":

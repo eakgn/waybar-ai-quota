@@ -172,20 +172,30 @@ def build_quota_card(provider: ProviderQuota):
         top.append(plan)
 
     if provider.available:
-        pct_text = (
-            "KİLİTLİ"
-            if provider.rate_limited
-            else (f"%{provider.headline_pct:.0f}" if isinstance(provider.headline_pct, (int, float)) else "—")
-        )
+        if provider.rate_limited:
+            pct_text = "KİLİTLİ"
+        elif provider.all_unlimited:
+            pct_text = "∞"
+        elif isinstance(provider.headline_pct, (int, float)):
+            pct_text = f"%{provider.headline_pct:.0f}"
+        else:
+            pct_text = "—"
         pct_lbl = Gtk.Label(label=pct_text)
         pct_lbl.add_css_class("an-session-title")
         top.append(pct_lbl)
     card.append(top)
 
     if not provider.available:
-        err = Gtk.Label(label=provider.error or "Veri alınamadı", xalign=0.0, wrap=True)
-        err.add_css_class("an-meta")
+        err = Gtk.Label(label=provider.error or "Canlı API hatası", xalign=0.0, wrap=True)
+        err.add_css_class("an-message")
         card.append(err)
+        if isinstance(provider.local_spend_5h_usd, (int, float)):
+            spend_lbl = Gtk.Label(
+                label=f"Son 5s yerel harcama (bilgi): ${provider.local_spend_5h_usd:.2f}",
+                xalign=0.0,
+            )
+            spend_lbl.add_css_class("an-meta")
+            card.append(spend_lbl)
         return card
 
     if isinstance(provider.headline_pct, (int, float)):
@@ -194,6 +204,11 @@ def build_quota_card(provider: ProviderQuota):
         bar.add_css_class("an-progress")
         bar.add_css_class(_bar_color_class(provider.headline_pct, provider.rate_limited))
         card.append(bar)
+
+    if provider.error:
+        warn = Gtk.Label(label=provider.error, xalign=0.0, wrap=True)
+        warn.add_css_class("an-meta")
+        card.append(warn)
 
     # Pencere özeti (ör. 5 Saatlik / Haftalık / Aylık)
     for win in provider.windows:
@@ -214,6 +229,14 @@ def build_quota_card(provider: ProviderQuota):
         val.add_css_class("an-meta")
         row.append(val)
         card.append(row)
+
+    if isinstance(provider.local_spend_5h_usd, (int, float)):
+        spend_lbl = Gtk.Label(
+            label=f"Son 5s yerel harcama: ${provider.local_spend_5h_usd:.2f}",
+            xalign=0.0,
+        )
+        spend_lbl.add_css_class("an-meta")
+        card.append(spend_lbl)
 
     # Havuz kırılımı (ör. Flash / Pro veya Chat / Premium)
     for pool in provider.pools:

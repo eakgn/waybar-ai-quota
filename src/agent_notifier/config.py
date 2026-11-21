@@ -32,12 +32,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "local_active_seconds": 3,
         "local_idle_seconds": 10,
         "remote_seconds": 600,
+        "remote_active_seconds": 30,
         "opencode_go_cache_seconds": 600,
         "copilot_cache_seconds": 600,
     },
     "thresholds": {
         "critical_pct": 15,
         "recent_activity_seconds": 300,
+        "active_window_minutes": 90,
+        "recent_history_hours": 24,
         "event_stale_seconds": 1800,
     },
     "cloud": {

@@ -272,23 +272,39 @@ class DashboardWindow(Adw.ApplicationWindow):
         sess_title.add_css_class("an-section-title")
         self._content.append(sess_title)
 
-        visible_sessions = [
-            s for s in snapshot.sessions if s.effective_state != SessionState.IDLE
-        ]
-        if not visible_sessions and snapshot.sessions:
-            visible_sessions = snapshot.sessions[:3]
+        active_window_sec = max(60, int(cfg_mod.get(config, "thresholds.active_window_minutes", 90)) * 60)
+        history_window_sec = max(3600, int(cfg_mod.get(config, "thresholds.recent_history_hours", 24)) * 3600)
 
-        if visible_sessions:
-            for root in visible_sessions[:8]:
+        recent_active = [
+            s
+            for s in snapshot.sessions
+            if s.effective_state != SessionState.IDLE
+            or (s.updated_age_seconds is not None and s.updated_age_seconds <= active_window_sec)
+        ]
+
+        if recent_active:
+            for root in recent_active[:8]:
                 self._content.append(build_session_tree_card(root))
         else:
             empty = Gtk.Label(
-                label="Aktif veya yakın zamanda çalışan oturum yok.\nAyarlar (⚙) menüsünden izlenen harness'ları yönetebilirsin.",
+                label="Son 90 dakikada çalışan oturum yok.",
                 xalign=0.0,
                 wrap=True,
             )
             empty.add_css_class("an-empty")
             self._content.append(empty)
+
+            last_24h = [
+                s
+                for s in snapshot.sessions
+                if s.updated_age_seconds is not None and s.updated_age_seconds <= history_window_sec
+            ][:3]
+            if last_24h:
+                hist_title = Gtk.Label(label="SON OTURUMLAR (24 SAAT)", xalign=0.0)
+                hist_title.add_css_class("an-section-title")
+                self._content.append(hist_title)
+                for root in last_24h:
+                    self._content.append(build_session_tree_card(root))
 
         if snapshot.providers:
             q_title = Gtk.Label(label="SEÇİLİ KOTA SAĞLAYICILARI", xalign=0.0)

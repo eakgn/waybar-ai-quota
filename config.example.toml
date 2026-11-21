@@ -17,16 +17,22 @@ github_copilot = false
 local_active_seconds = 3
 # Boştayken yerel tarama aralığı (saniye)
 local_idle_seconds = 10
-# Uzak kota API önbellek ömrü (saniye)
+# Boştayken uzak kota API önbellek ömrü (saniye)
 remote_seconds = 600
+# Aktif oturumun kullandığı kotayı anlık izlemek için önbellek ömrü (saniye)
+remote_active_seconds = 30
 opencode_go_cache_seconds = 600
 copilot_cache_seconds = 600
 
 [thresholds]
-# Bu yüzdenin altı kritik kota uyarısı üretir
+# Bu yüzdenin altı kritik kota uyarısı üretir (boştayken bar'da yalnız kritik altı görünür)
 critical_pct = 15
-# Yakın zamanda biten oturumların "done_unseen" veya yakın geçmiş sayılma süresi (saniye)
+# Yakın zamanda biten oturumların "done_unseen" sayılma süresi (saniye)
 recent_activity_seconds = 300
+# Ana oturum listesinde tutulan yakın çalışma penceresi (dakika)
+active_window_minutes = 90
+# Son 90 dakikada oturum yoksa "Son Oturumlar" için taranacak pencere (saat)
+recent_history_hours = 24
 # Push olaylarının bayat sayılıp zaman aşımına uğrama süresi (saniye)
 event_stale_seconds = 1800
 

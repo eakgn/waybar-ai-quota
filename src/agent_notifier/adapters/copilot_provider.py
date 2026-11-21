@@ -94,19 +94,21 @@ def _build_quota(
             QuotaPool(
                 key=str(item.get("key") or ""),
                 label=str(item.get("label") or ""),
-                remaining_pct=100.0 if unlimited else (float(pct) if isinstance(pct, (int, float)) else None),
+                remaining_pct=None if unlimited else (float(pct) if isinstance(pct, (int, float)) else None),
                 unlimited=unlimited,
                 critical=bool(not unlimited and isinstance(pct, (int, float)) and float(pct) < critical_pct),
                 detail="Sınırsız" if unlimited else "",
             )
         )
-    headline = min(limited_pcts) if limited_pcts else (100.0 if pools else None)
+    all_unlimited = bool(pools) and all(p.unlimited for p in pools)
+    headline = min(limited_pcts) if limited_pcts else None
     return ProviderQuota(
         key="github_copilot",
         label="GitHub Copilot",
         available=bool(pools) or bool(data.get("plan_label")),
         plan_label=data.get("plan_label"),
         headline_pct=headline,
+        all_unlimited=all_unlimited,
         critical=bool(headline is not None and headline < critical_pct),
         source="cache" if cached else "api",
         reset_human=str(data.get("reset_date") or "") or None,
@@ -134,9 +136,11 @@ class GitHubCopilotProviderAdapter:
         config: dict[str, Any],
         force_refresh: bool = False,
         offline: bool = False,
+        ttl_override: int | None = None,
     ) -> ProviderQuota:
         critical_pct = float(cfg_mod.get(config, "thresholds.critical_pct", 15))
-        ttl = int(cfg_mod.get(config, "refresh.copilot_cache_seconds", 600))
+        default_ttl = int(cfg_mod.get(config, "refresh.copilot_cache_seconds", 600))
+        ttl = int(ttl_override) if ttl_override is not None else default_ttl
         cache = _load_cache()
         cache_ts = float(cache.get("fetched_at") or 0) if cache else 0.0
         fresh = bool(cache) and (time.time() - cache_ts) <= ttl

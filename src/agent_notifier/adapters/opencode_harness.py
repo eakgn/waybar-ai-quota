@@ -91,11 +91,14 @@ class OpenCodeHarnessAdapter:
         config: dict[str, Any],
         state: dict[str, Any],
         push_events: list[EventRecord],
+        include_all: bool = False,
     ) -> tuple[HarnessSummary, list[SessionNode]]:
         summary = HarnessSummary(key=self.info.key, label=self.info.label)
         db_path = opencode_db_path()
         recent_seconds = int(cfg_mod.get(config, "thresholds.recent_activity_seconds", 300))
+        history_hours = max(1, int(cfg_mod.get(config, "thresholds.recent_history_hours", 24)))
         now = time.time()
+        cutoff_ms = int((now - history_hours * 3600) * 1000)
 
         push_by_id: dict[str, EventRecord] = {
             ev.session_id: ev for ev in push_events if ev.harness == self.info.key
@@ -115,18 +118,36 @@ class OpenCodeHarnessAdapter:
                 try:
                     cols = _session_columns(con)
                     has_parent = "parent_id" in cols
+                    has_busy = "time_busy" in cols
                     parent_expr = "parent_id" if has_parent else "NULL AS parent_id"
-                    rows = con.execute(
-                        f"""
-                        SELECT id, {parent_expr}, directory, title, agent, model, cost,
-                               tokens_input, tokens_output, tokens_cache_read,
-                               time_updated, time_suspended
-                        FROM session_v2
-                        WHERE time_archived IS NULL
-                        ORDER BY time_updated DESC
-                        LIMIT 60
-                        """
-                    ).fetchall()
+                    busy_expr = "time_busy" if has_busy else "NULL AS time_busy"
+                    if include_all:
+                        rows = con.execute(
+                            f"""
+                            SELECT id, {parent_expr}, directory, title, agent, model, cost,
+                                   tokens_input, tokens_output, tokens_cache_read,
+                                   time_updated, time_suspended, {busy_expr}
+                            FROM session_v2
+                            WHERE time_archived IS NULL
+                            ORDER BY time_updated DESC
+                            LIMIT 60
+                            """
+                        ).fetchall()
+                    else:
+                        busy_clause = "OR time_busy IS NOT NULL" if has_busy else ""
+                        rows = con.execute(
+                            f"""
+                            SELECT id, {parent_expr}, directory, title, agent, model, cost,
+                                   tokens_input, tokens_output, tokens_cache_read,
+                                   time_updated, time_suspended, {busy_expr}
+                            FROM session_v2
+                            WHERE time_archived IS NULL
+                              AND (time_suspended IS NOT NULL {busy_clause} OR time_updated >= ?)
+                            ORDER BY time_updated DESC
+                            LIMIT 40
+                            """,
+                            (cutoff_ms,),
+                        ).fetchall()
                     pending = [row["id"] for row in rows if not row["model"]]
                     fallback = _last_assistant_models(con, pending)
                     summary.available = True
@@ -147,7 +168,7 @@ class OpenCodeHarnessAdapter:
                     updated_ms = int(row["time_updated"] or 0)
                     updated_ts = updated_ms / 1000.0 if updated_ms else None
                     age = max(0, int(now - updated_ts)) if updated_ts else None
-                    in_flight = row["time_suspended"] is not None
+                    in_flight = (row["time_suspended"] is not None) or (row["time_busy"] is not None)
 
                     if in_flight:
                         in_flight_ids.add(sid)

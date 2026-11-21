@@ -29,6 +29,7 @@ class HarnessAdapter(Protocol):
         config: dict[str, Any],
         state: dict[str, Any],
         push_events: list[EventRecord],
+        include_all: bool = False,
     ) -> tuple[HarnessSummary, list[SessionNode]]:
         """Ana oturum (ve bağlı alt ajan) düğümlerini döndürür."""
         ...
@@ -47,6 +48,7 @@ class ProviderAdapter(Protocol):
         config: dict[str, Any],
         force_refresh: bool = False,
         offline: bool = False,
+        ttl_override: int | None = None,
     ) -> ProviderQuota:
         """Sağlayıcı kota/bütçe durumunu döndürür."""
         ...

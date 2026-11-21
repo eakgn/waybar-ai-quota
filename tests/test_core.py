@@ -375,15 +375,142 @@ class TestAdaptersAndEngine(unittest.TestCase):
             quota = adapter.collect(config=cfg, force_refresh=True, offline=False)
 
         self.assertTrue(quota.available)
-        self.assertEqual(quota.source, "hybrid")
+        self.assertEqual(quota.source, "api")
         self.assertEqual(quota.headline_pct, 75.0)
+        self.assertEqual(quota.local_spend_5h_usd, 4.0)
         self.assertEqual(len(quota.windows), 3)
-        self.assertEqual(len(quota.pools), 4)
 
         # Önbellekte gizli token veya orgID sızıntısı olmamalı
         cache_text = cfg_mod.provider_cache_path("opencode_go").read_text(encoding="utf-8")
         self.assertNotIn("SECRET_TOKEN_DO_NOT_LEAK", cache_text)
         self.assertNotIn("ws_secret_org_123", cache_text)
+
+    def test_opencode_go_no_fake_estimate_on_api_error(self) -> None:
+        from urllib.error import URLError
+
+        env = IsolatedEnv(self)
+        env.conn.execute(
+            "INSERT INTO credential (id, provider, data) VALUES ('1', 'opencode-go', ?)",
+            (json.dumps({"access_token": "TOK"}),),
+        )
+        env.conn.commit()
+        cfg = cfg_mod.load_config()
+        adapter = opencode_go_provider.OpenCodeGoProviderAdapter()
+        with mock.patch.object(opencode_go_provider, "urlopen", side_effect=URLError("offline")):
+            quota = adapter.collect(config=cfg, force_refresh=True, offline=False)
+
+        self.assertFalse(quota.available)
+        self.assertIsNone(quota.headline_pct)
+        self.assertIn("Canlı API hatası", quota.error or "")
+
+    def test_copilot_all_unlimited_does_not_fake_100_pct(self) -> None:
+        cfg = cfg_mod.load_config()
+        sanitized = copilot_provider._sanitize(
+            {
+                "copilot_plan": "student",
+                "quota_snapshots": {
+                    "chat": {"unlimited": True, "percent_remaining": None},
+                    "completions": {"unlimited": True, "percent_remaining": None},
+                },
+            },
+            cfg,
+        )
+        quota = copilot_provider._build_quota(sanitized, time.time(), False, 15.0)
+        self.assertTrue(quota.available)
+        self.assertTrue(quota.all_unlimited)
+        self.assertIsNone(quota.headline_pct)
+
+    def test_opencode_time_busy_and_24h_cutoff_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "opencode_busy.db"
+            con = sqlite3.connect(db)
+            con.executescript(
+                """
+                CREATE TABLE session_v2 (
+                    id text PRIMARY KEY, parent_id text, project_id text NOT NULL,
+                    directory text NOT NULL, title text, agent text, model text,
+                    cost real DEFAULT 0, tokens_input integer DEFAULT 0,
+                    tokens_output integer DEFAULT 0, tokens_cache_read integer DEFAULT 0,
+                    time_created integer NOT NULL, time_updated integer NOT NULL,
+                    time_archived integer, time_suspended integer, time_busy integer
+                );
+                CREATE TABLE session_message (
+                    id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL,
+                    seq integer NOT NULL, time_created integer NOT NULL,
+                    time_updated integer NOT NULL, data text NOT NULL
+                );
+                """
+            )
+            now = now_ms()
+            three_days_ago = now - 72 * 3600 * 1000
+            # time_busy dolu ama time_suspended NULL -> RUNNING algılanmalı (R3)
+            con.execute(
+                "INSERT INTO session_v2 VALUES ('s_busy', NULL, 'p1', '/tmp/a', 'Busy', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?)",
+                (now - 5000, now - 1000, now - 1000),
+            )
+            # 3 gün önceki eski sohbet -> varsayılan sorguda hiç gelmemeli
+            con.execute(
+                "INSERT INTO session_v2 VALUES ('s_old', NULL, 'p1', '/tmp/b', 'Eski', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, NULL)",
+                (three_days_ago, three_days_ago),
+            )
+            con.commit()
+            con.close()
+
+            env = {
+                "AGENT_NOTIFIER_OPENCODE_DB": str(db),
+                "AGENT_NOTIFIER_STATE_DIR": str(Path(tmp) / "state"),
+                "AGENT_NOTIFIER_CONFIG_DIR": str(Path(tmp) / "cfg"),
+            }
+            cfg = cfg_mod.load_config()
+            cfg["harnesses"] = {"opencode": True, "antigravity": False}
+            cfg["providers"] = {"opencode_go": False, "github_copilot": False}
+            with mock.patch.dict(os.environ, env, clear=False):
+                snap = engine.collect_snapshot(config=cfg, offline=True)
+                self.assertEqual([s.id for s in snap.sessions], ["s_busy"])
+                self.assertEqual(snap.sessions[0].state, SessionState.RUNNING)
+
+                snap_all = engine.collect_snapshot(config=cfg, offline=True, include_all=True)
+                self.assertEqual({s.id for s in snap_all.sessions}, {"s_busy", "s_old"})
+
+    def test_engine_applies_fast_ttl_only_to_actively_used_provider(self) -> None:
+        env = IsolatedEnv(self)
+        ts = now_ms()
+        env.conn.execute(
+            """
+            INSERT INTO session_v2 (id, parent_id, project_id, directory, title, agent, model,
+                                    cost, tokens_input, tokens_output, tokens_cache_read,
+                                    time_created, time_updated, time_archived, time_suspended)
+            VALUES ('s_act', NULL, 'p1', '/tmp/a', 'Aktif', 'build',
+                    '{"providerID":"opencode-go","id":"deepseek-v4.1-flash"}',
+                    0.1, 100, 50, 0, ?, ?, NULL, ?)
+            """,
+            (ts - 5000, ts - 1000, ts - 1000),
+        )
+        env.conn.commit()
+        cfg = cfg_mod.load_config()
+        cfg["harnesses"] = {"opencode": True, "antigravity": False}
+        cfg["providers"] = {"opencode_go": True, "github_copilot": True}
+        cfg["refresh"]["remote_active_seconds"] = 30
+
+        seen_ttls: dict[str, int | None] = {}
+
+        def fake_go(**kwargs):
+            seen_ttls["opencode_go"] = kwargs.get("ttl_override")
+            return opencode_go_provider.ProviderQuota(key="opencode_go", label="OpenCode Go", available=False)
+
+        def fake_gh(**kwargs):
+            seen_ttls["github_copilot"] = kwargs.get("ttl_override")
+            return copilot_provider.ProviderQuota(key="github_copilot", label="GitHub Copilot", available=False)
+
+        with mock.patch.object(opencode_go_provider.OpenCodeGoProviderAdapter, "collect", side_effect=fake_go), mock.patch.object(
+            copilot_provider.GitHubCopilotProviderAdapter, "collect", side_effect=fake_gh
+        ):
+            engine.collect_snapshot(config=cfg, offline=True)
+
+        self.assertEqual(seen_ttls["opencode_go"], 30)
+        self.assertIsNone(seen_ttls["github_copilot"])
 
     def test_opencode_go_reads_real_v2_control_account_and_credential_schemas(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

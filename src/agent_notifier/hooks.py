@@ -74,7 +74,7 @@ def antigravity_hook_entry(binary: str | None = None) -> dict[str, Any]:
         ],
         "PostToolUse": [
             {
-                "matcher": "ask_question",
+                "matcher": "ask_question|run_command",
                 "hooks": [
                     {
                         "type": "command",

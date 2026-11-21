@@ -19,6 +19,7 @@
 - [x] **B11** (`e5278b6`): `opencode_go_provider.py` gerçek `opencode.db` v2 DDL (`control_account` + `credential` + `workspace`) uyumu.
 - [x] **B13** (`72596e2`): `notifier.py` sabit oturum anahtarı ile çift `done` bildiriminin önlenmesi + 24s budama.
 - [x] **B5**: Antigravity kota ToS şeffaflık notu (`setup`, Dashboard, `README.md`) ve `Stop` hook + `/usage` fikrinin teknik/ToS değerlendirmesi.
+- [x] **D-Bus Bildirim Dinleyicisi (`linux/notify_watcher.py`):** Antigravity komut izni istediğinde gönderdiği `org.freedesktop.Notifications.Notify` çağrısını ayrı bir `BecomeMonitor` bağlantısıyla pasif dinleyip Tray ikonunu anında `WAITING_INPUT` durumuna geçiren modül eklendi (`20/20` test + ardışık 2x D-Bus E2E testi geçti).
 
 ## Sonraki Adım
 1. Canlı masaüstünde yeni eklentileri yeniden kurup doğrulamak:

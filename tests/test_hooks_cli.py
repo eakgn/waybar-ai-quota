@@ -291,6 +291,36 @@ class TestLinuxIconsAndSNI(unittest.TestCase):
         menu_node = Gio.DBusNodeInfo.new_for_xml(sni.DBUSMENU_INTROSPECTION_XML)
         self.assertEqual(menu_node.interfaces[0].name, sni.DBUSMENU_INTERFACE)
 
+    def test_notify_watcher_classification_rules(self) -> None:
+        from agent_notifier.linux.notify_watcher import classify_desktop_notification
+
+        # Kendi bildirimini yok saymalı (sonsuz döngü önleme)
+        self.assertIsNone(
+            classify_desktop_notification("agent-notifier", "Soru / Onay Bekliyor", "Antigravity bekliyor")
+        )
+        # İlgisiz uygulamaları yok saymalı
+        self.assertIsNone(classify_desktop_notification("Firefox", "Download complete", "file.zip"))
+
+        # Antigravity komut izni -> WAITING_INPUT
+        res = classify_desktop_notification("Antigravity", "Permission Required", "Allow run_command?")
+        self.assertIsNotNone(res)
+        assert res is not None
+        self.assertEqual(res[0], "antigravity")
+        self.assertEqual(res[1], SessionState.WAITING_INPUT)
+        self.assertIn("Allow run_command?", res[2])
+
+        # Antigravity bitiş bildirimi -> DONE_UNSEEN
+        res_done = classify_desktop_notification("Antigravity", "Task completed", "Finished edits")
+        self.assertIsNotNone(res_done)
+        assert res_done is not None
+        self.assertEqual(res_done[1], SessionState.DONE_UNSEEN)
+
+        # Antigravity hata bildirimi -> ERROR
+        res_err = classify_desktop_notification("Antigravity", "Command failed", "Exit code 1")
+        self.assertIsNotNone(res_err)
+        assert res_err is not None
+        self.assertEqual(res_err[1], SessionState.ERROR)
+
 
 if __name__ == "__main__":
     unittest.main()

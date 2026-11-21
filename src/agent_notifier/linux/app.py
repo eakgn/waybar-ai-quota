@@ -37,6 +37,7 @@ except (ImportError, ValueError):
 from .. import config as cfg_mod  # noqa: E402
 from .. import engine, events as events_mod, notifier  # noqa: E402
 from ..models import STATE_LABELS, SessionState, Snapshot  # noqa: E402
+from .notify_watcher import DesktopNotificationWatcher  # noqa: E402
 from .sni import StatusNotifierTray  # noqa: E402
 from .styles import DASHBOARD_CSS  # noqa: E402
 from .widgets import build_quota_card, build_session_tree_card, build_settings_panel  # noqa: E402
@@ -308,6 +309,7 @@ class AgentNotifierApp(Adw.Application):
         self.latest_snapshot: Snapshot | None = None
         self._window: DashboardWindow | None = None
         self._tray: StatusNotifierTray | None = None
+        self._notify_watcher: DesktopNotificationWatcher | None = None
         self._poll_source_id = 0
         self._last_events_mtime = 0.0
         self._last_refresh_ts = 0.0
@@ -347,6 +349,10 @@ class AgentNotifierApp(Adw.Application):
                 on_quit=self.quit_app,
             )
             self._tray.start()
+            self._notify_watcher = DesktopNotificationWatcher(
+                on_event=lambda: self.trigger_refresh(force_remote=False)
+            )
+            self._notify_watcher.start()
 
         self.trigger_refresh(force_remote=False)
         # 1 sn ucuz stat kontrolü; gerçek tarama active/idle aralığına göre yapılır
@@ -483,6 +489,8 @@ class AgentNotifierApp(Adw.Application):
             GLib.source_remove(self._poll_source_id)
             self._poll_source_id = 0
         self.hide_dashboard()
+        if self._notify_watcher is not None:
+            self._notify_watcher.stop()
         if self._tray is not None:
             self._tray.stop()
         if self.tray_mode:

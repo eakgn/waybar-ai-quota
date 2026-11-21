@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "recent_activity_seconds": 300,
         "active_window_minutes": 90,
         "recent_history_hours": 24,
+        "stale_running_seconds": 3600,
         "event_stale_seconds": 1800,
     },
     "cloud": {

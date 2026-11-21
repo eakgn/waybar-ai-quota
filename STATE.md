@@ -26,6 +26,7 @@
   - **R3:** `opencode_harness.py` gerçek `time_busy` sütununu da sorguluyor ve varsayılan SQL sorgusu son 24 saatle sınırlandı (`status --summary` / `--all`).
   - **R4:** `notify_watcher.py` kör `else -> WAITING_INPUT` varsayımı kaldırıldı (belirsiz bildirimler `None`), çoklu oturumda proje eşleştirme + geçici `antigravity-prompt` otomatik temizleme eklendi.
   - **R5 & Dinamik Bar:** Bar boştayken yalnız kritik eşik altındaki kotaları gösterir (`● Boşta`); oturum aktifken yalnız o oturumun kullandığı sağlayıcıyı 30 sn canlı TTL ile günceller. Dashboard son 90 dk'da oturum yoksa `"SON OTURUMLAR (24 SAAT)"` altında en fazla 3 oturum gösterir (`25/25` birim testi geçti).
+- [x] **B14 (`opencode_harness.py` sahte `RUNNING` düzeltmesi — canlı DB doğrulamalı):** `session_v2.time_busy` tarihsel zaman damgası olduğu için `time_busy IS NOT NULL` kontrolü 5 eski bitmiş oturumu `RUNNING` gösteriyordu. Gerçek satırlar incelenerek `time_busy > time_idle` + `time_idle` kesin bitiş zamanı + `stale_running_seconds` (1 saat) çökme korumasına geçirildi; canlı `opencode.db` üzerinde 5 sahte oturumun tamamının kalktığı doğrulandı (`25/25` test).
 
 ## Sonraki Adım
 1. Canlı masaüstünde yeni eklentileri yeniden kurup doğrulamak:

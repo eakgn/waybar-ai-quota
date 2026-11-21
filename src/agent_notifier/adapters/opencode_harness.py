@@ -1,7 +1,16 @@
 """OpenCode harness adaptörü (`opencode.db` salt-okunur + push birleştirme).
 
-`session_v2.parent_id` sütunu mevcutsa ana oturum -> alt ajan (subagent)
-ağacını otomatik olarak kurar.
+Doğrulanmış OpenCode v2 `session_v2` zaman damgası semantiği:
+- `time_busy`: Oturumun son kez çalışmaya başladığı zaman (ms). Oturum bitince
+  NULL yapılmaz; tarihsel olarak kalır!
+- `time_idle`: Oturumun son kez boşta/tamamlanmış duruma geçtiği kesin bitiş
+  zamanı (ms).
+- Gerçek aktiflik kuralı:
+    `is_busy = (time_busy IS NOT NULL) and (time_idle IS NULL or time_busy > time_idle)`
+    `is_suspended = (time_suspended IS NOT NULL) and (time_idle IS NULL or time_suspended > time_idle)`
+  Ek olarak OpenCode beklenmedik biçimde (`SIGKILL`/çökme) kapanırsa bayat bir
+  `time_busy` satırının sonsuza dek "Çalışıyor" kalmaması için
+  `stale_running_seconds` koruması uygulanır.
 """
 
 from __future__ import annotations
@@ -74,6 +83,28 @@ def _session_columns(con: sqlite3.Connection) -> set[str]:
         return set()
 
 
+def _is_row_in_flight(
+    *,
+    busy_ms: int | None,
+    idle_ms: int | None,
+    suspended_ms: int | None,
+    updated_ms: int | None,
+    now_sec: float,
+    stale_running_seconds: int,
+) -> bool:
+    """Satırın gerçekten şu an çalışıp çalışmadığını doğrular (tarihsel `time_busy` tuzağını önler)."""
+    is_busy = busy_ms is not None and (idle_ms is None or busy_ms > idle_ms)
+    is_suspended = suspended_ms is not None and (idle_ms is None or suspended_ms > idle_ms)
+    if not (is_busy or is_suspended):
+        return False
+
+    latest_ms = max(v for v in (busy_ms, suspended_ms, updated_ms) if v is not None)
+    if stale_running_seconds > 0 and (now_sec - latest_ms / 1000.0) > stale_running_seconds:
+        # Çökme / SIGKILL sonrası sahipsiz kalmış satır; sahte RUNNING üretme
+        return False
+    return True
+
+
 class OpenCodeHarnessAdapter:
     info = AdapterInfo(
         key="opencode",
@@ -97,6 +128,7 @@ class OpenCodeHarnessAdapter:
         db_path = opencode_db_path()
         recent_seconds = int(cfg_mod.get(config, "thresholds.recent_activity_seconds", 300))
         history_hours = max(1, int(cfg_mod.get(config, "thresholds.recent_history_hours", 24)))
+        stale_running_seconds = int(cfg_mod.get(config, "thresholds.stale_running_seconds", 3600))
         now = time.time()
         cutoff_ms = int((now - history_hours * 3600) * 1000)
 
@@ -119,14 +151,24 @@ class OpenCodeHarnessAdapter:
                     cols = _session_columns(con)
                     has_parent = "parent_id" in cols
                     has_busy = "time_busy" in cols
+                    has_idle = "time_idle" in cols
+                    has_outcome = "idle_outcome" in cols
+
                     parent_expr = "parent_id" if has_parent else "NULL AS parent_id"
                     busy_expr = "time_busy" if has_busy else "NULL AS time_busy"
+                    idle_expr = "time_idle" if has_idle else "NULL AS time_idle"
+                    outcome_expr = "idle_outcome" if has_outcome else "NULL AS idle_outcome"
+
+                    select_cols = (
+                        f"id, {parent_expr}, directory, title, agent, model, cost, "
+                        f"tokens_input, tokens_output, tokens_cache_read, "
+                        f"time_updated, time_suspended, {busy_expr}, {idle_expr}, {outcome_expr}"
+                    )
+
                     if include_all:
                         rows = con.execute(
                             f"""
-                            SELECT id, {parent_expr}, directory, title, agent, model, cost,
-                                   tokens_input, tokens_output, tokens_cache_read,
-                                   time_updated, time_suspended, {busy_expr}
+                            SELECT {select_cols}
                             FROM session_v2
                             WHERE time_archived IS NULL
                             ORDER BY time_updated DESC
@@ -134,16 +176,32 @@ class OpenCodeHarnessAdapter:
                             """
                         ).fetchall()
                     else:
-                        busy_clause = "OR time_busy IS NOT NULL" if has_busy else ""
+                        active_clauses: list[str] = []
+                        if has_busy and has_idle:
+                            active_clauses.append(
+                                "(time_busy IS NOT NULL AND (time_idle IS NULL OR time_busy > time_idle))"
+                            )
+                            active_clauses.append(
+                                "(time_suspended IS NOT NULL AND (time_idle IS NULL OR time_suspended > time_idle))"
+                            )
+                            time_expr = "COALESCE(time_idle, time_updated)"
+                        elif has_idle:
+                            active_clauses.append(
+                                "(time_suspended IS NOT NULL AND (time_idle IS NULL OR time_suspended > time_idle))"
+                            )
+                            time_expr = "COALESCE(time_idle, time_updated)"
+                        else:
+                            active_clauses.append("(time_suspended IS NOT NULL)")
+                            time_expr = "time_updated"
+
+                        where_active = " OR ".join(active_clauses)
                         rows = con.execute(
                             f"""
-                            SELECT id, {parent_expr}, directory, title, agent, model, cost,
-                                   tokens_input, tokens_output, tokens_cache_read,
-                                   time_updated, time_suspended, {busy_expr}
+                            SELECT {select_cols}
                             FROM session_v2
                             WHERE time_archived IS NULL
-                              AND (time_suspended IS NOT NULL {busy_clause} OR time_updated >= ?)
-                            ORDER BY time_updated DESC
+                              AND ({where_active} OR {time_expr} >= ?)
+                            ORDER BY {time_expr} DESC
                             LIMIT 40
                             """,
                             (cutoff_ms,),
@@ -165,17 +223,43 @@ class OpenCodeHarnessAdapter:
                     if not mod and sid in fallback:
                         prov, mod = fallback[sid]
                     model_full = f"{prov}/{mod}" if prov and mod else (mod or prov)
-                    updated_ms = int(row["time_updated"] or 0)
-                    updated_ts = updated_ms / 1000.0 if updated_ms else None
-                    age = max(0, int(now - updated_ts)) if updated_ts else None
-                    in_flight = (row["time_suspended"] is not None) or (row["time_busy"] is not None)
+
+                    updated_ms = int(row["time_updated"]) if row["time_updated"] is not None else None
+                    busy_ms = int(row["time_busy"]) if row["time_busy"] is not None else None
+                    idle_ms = int(row["time_idle"]) if row["time_idle"] is not None else None
+                    suspended_ms = int(row["time_suspended"]) if row["time_suspended"] is not None else None
+                    outcome = str(row["idle_outcome"] or "").strip().lower()
+
+                    in_flight = _is_row_in_flight(
+                        busy_ms=busy_ms,
+                        idle_ms=idle_ms,
+                        suspended_ms=suspended_ms,
+                        updated_ms=updated_ms,
+                        now_sec=now,
+                        stale_running_seconds=stale_running_seconds,
+                    )
+
+                    # Gerçek zaman damgası: çalışıyorsa en son hareket, bittiyse kesin `time_idle` (yoksa `time_updated`)
+                    if in_flight:
+                        ref_ms = max(v for v in (busy_ms, suspended_ms, updated_ms) if v is not None)
+                    else:
+                        ref_ms = idle_ms if idle_ms is not None else updated_ms
+
+                    ref_ts = ref_ms / 1000.0 if ref_ms else None
+                    age = max(0, int(now - ref_ts)) if ref_ts else None
+
+                    # 24 saat penceresi dışında kalmış sahipsiz (crashed) satırları default görünümde dışla
+                    if not include_all and not in_flight and ref_ms is not None and ref_ms < cutoff_ms:
+                        continue
 
                     if in_flight:
                         in_flight_ids.add(sid)
                         node_state = SessionState.RUNNING
-                    elif updated_ts and age is not None and age <= recent_seconds:
-                        if events_mod.is_done_seen(self.info.key, sid, updated_ts, state):
+                    elif ref_ts and age is not None and age <= recent_seconds:
+                        if events_mod.is_done_seen(self.info.key, sid, ref_ts, state):
                             node_state = SessionState.IDLE
+                        elif outcome in ("error", "failed"):
+                            node_state = SessionState.ERROR
                         else:
                             node_state = SessionState.DONE_UNSEEN
                     else:
@@ -203,8 +287,8 @@ class OpenCodeHarnessAdapter:
                         tokens_input=tokens_in,
                         tokens_output=tokens_out,
                         cost_usd=round(float(row["cost"] or 0.0), 6),
-                        updated_at=iso_now(updated_ts) if updated_ts else None,
-                        updated_ts=updated_ts,
+                        updated_at=iso_now(ref_ts) if ref_ts else None,
+                        updated_ts=ref_ts,
                         updated_age_seconds=age,
                         source="pull",
                     )
@@ -222,11 +306,6 @@ class OpenCodeHarnessAdapter:
 
             existing = nodes_by_id.get(sid)
             if existing is not None:
-                # Durum uzlaşması (Pull <-> Push):
-                # - Oturum hâlâ in-flight iken gelen `waiting_input` push olayı,
-                #   DB'ye sonradan düşen metadata `time_updated` yazımıyla ezilmez.
-                # - Oturum tamamlandıysa (`not in_flight`) ve DB zamanı push'tan
-                #   belirgin şekilde yeniyse DB durumu kazanır.
                 still_waiting = ev_state == SessionState.WAITING_INPUT and sid in in_flight_ids
                 push_is_fresh = existing.updated_ts is None or ev.ts >= (existing.updated_ts - 2.0)
                 if still_waiting or push_is_fresh:

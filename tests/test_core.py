@@ -432,7 +432,8 @@ class TestAdaptersAndEngine(unittest.TestCase):
                     cost real DEFAULT 0, tokens_input integer DEFAULT 0,
                     tokens_output integer DEFAULT 0, tokens_cache_read integer DEFAULT 0,
                     time_created integer NOT NULL, time_updated integer NOT NULL,
-                    time_archived integer, time_suspended integer, time_busy integer
+                    time_archived integer, time_suspended integer,
+                    time_busy integer, time_idle integer, idle_outcome text
                 );
                 CREATE TABLE session_message (
                     id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL,
@@ -442,18 +443,34 @@ class TestAdaptersAndEngine(unittest.TestCase):
                 """
             )
             now = now_ms()
-            three_days_ago = now - 72 * 3600 * 1000
-            # time_busy dolu ama time_suspended NULL -> RUNNING algılanmalı (R3)
+            yesterday = now - 27 * 3600 * 1000
+            three_hours_ago = now - 3 * 3600 * 1000
+
+            # 1) Gerçekten çalışan oturum: time_busy > time_idle -> RUNNING
             con.execute(
-                "INSERT INTO session_v2 VALUES ('s_busy', NULL, 'p1', '/tmp/a', 'Busy', 'build', "
-                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?)",
-                (now - 5000, now - 1000, now - 1000),
+                "INSERT INTO session_v2 VALUES ('s_active', NULL, 'p1', '/tmp/a', 'Aktif', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?, ?, 'succeeded')",
+                (now - 60000, now - 2000, now - 2000, now - 30000),
             )
-            # 3 gün önceki eski sohbet -> varsayılan sorguda hiç gelmemeli
+            # 2) 30 sn önce biten oturum: time_idle > time_busy -> DONE_UNSEEN (bitiş zamanı = time_idle)
             con.execute(
-                "INSERT INTO session_v2 VALUES ('s_old', NULL, 'p1', '/tmp/b', 'Eski', 'build', "
-                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, NULL)",
-                (three_days_ago, three_days_ago),
+                "INSERT INTO session_v2 VALUES ('s_just_done', NULL, 'p1', '/tmp/b', 'Bitti', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?, ?, 'succeeded')",
+                (now - 90000, now - 30000, now - 60000, now - 30000),
+            )
+            # 3) Düne ait (27 saat önce) bitmiş oturum: time_busy DOLU ama time_idle > time_busy!
+            #    ASLA RUNNING olmamalı ve 24s varsayılan sorgusundan hariç tutulmalı (B14).
+            con.execute(
+                "INSERT INTO session_v2 VALUES ('s_yesterday', NULL, 'p1', '/tmp/c', 'Dün', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?, ?, 'succeeded')",
+                (yesterday - 60000, yesterday, yesterday - 48000, yesterday),
+            )
+            # 4) Çökme / SIGKILL sonrası 3 saat öncesinden sahipsiz kalmış time_busy (time_idle=NULL):
+            #    stale_running_seconds (1s) geçtiği için RUNNING DEĞİL, IDLE olmalı!
+            con.execute(
+                "INSERT INTO session_v2 VALUES ('s_crashed', NULL, 'p1', '/tmp/d', 'Çökmüş', 'build', "
+                "'opencode-go/deepseek-v4.1-flash', 0, 0, 0, 0, ?, ?, NULL, NULL, ?, NULL, NULL)",
+                (three_hours_ago - 1000, three_hours_ago, three_hours_ago),
             )
             con.commit()
             con.close()
@@ -468,11 +485,17 @@ class TestAdaptersAndEngine(unittest.TestCase):
             cfg["providers"] = {"opencode_go": False, "github_copilot": False}
             with mock.patch.dict(os.environ, env, clear=False):
                 snap = engine.collect_snapshot(config=cfg, offline=True)
-                self.assertEqual([s.id for s in snap.sessions], ["s_busy"])
-                self.assertEqual(snap.sessions[0].state, SessionState.RUNNING)
+                by_id = {s.id: s for s in snap.sessions}
+                self.assertEqual(set(by_id), {"s_active", "s_just_done", "s_crashed"})
+                self.assertNotIn("s_yesterday", by_id)
+                self.assertEqual(by_id["s_active"].state, SessionState.RUNNING)
+                self.assertEqual(by_id["s_just_done"].state, SessionState.DONE_UNSEEN)
+                self.assertEqual(by_id["s_crashed"].state, SessionState.IDLE)
 
                 snap_all = engine.collect_snapshot(config=cfg, offline=True, include_all=True)
-                self.assertEqual({s.id for s in snap_all.sessions}, {"s_busy", "s_old"})
+                by_id_all = {s.id: s for s in snap_all.sessions}
+                self.assertIn("s_yesterday", by_id_all)
+                self.assertEqual(by_id_all["s_yesterday"].state, SessionState.IDLE)
 
     def test_engine_applies_fast_ttl_only_to_actively_used_provider(self) -> None:
         env = IsolatedEnv(self)
